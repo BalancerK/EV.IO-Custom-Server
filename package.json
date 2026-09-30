@@ -5,6 +5,9 @@
   "description": "A from-scratch, server-authoritative reimplementation of ev.io's game server, physics, and netcode — plus an optional WebRTC (netlib) transport alongside the default WebSocket one.",
   "main": "local_ws_server.js",
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node local_ws_server.js",
     "start:sword": "node local_ws_server.js --sword-only",

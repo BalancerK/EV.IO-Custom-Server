@@ -57,6 +57,13 @@ npm test               # every test
 npm run test:combat    # a single suite — see package.json's scripts for the full list
 ```
 
+One suite (`test:browser`, included in `npm test`) drives a real headless browser via Playwright
+and needs its browser binaries installed once first, or it fails on a fresh clone:
+
+```bash
+npx playwright install chromium
+```
+
 ## Connecting a client
 
 This server implements ev.io's own wire protocol, so it's the *client* that needs to be told to
