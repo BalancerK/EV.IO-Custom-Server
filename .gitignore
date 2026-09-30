@@ -1,0 +1,9 @@
+# Runtime state / caches — regenerate on demand, not source
+map_cache/
+settings.local.json
+settings.local.json.tmp
+node_modules/
+
+*.log
+.DS_Store
+Thumbs.db
