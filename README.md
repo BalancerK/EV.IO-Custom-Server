@@ -133,10 +133,11 @@ EVIO_NETLIB_SIGNALING_URL=wss://your-signaling-server/v0/signaling \
 npm start
 ```
 
-You need a netlib-compatible signaling server reachable at that URL — this repo ships the client-
-side adapter and the built `vendor/netlib.js`, but not a signaling server deployment. Setting one
-up is a separate, optional piece of infrastructure (the upstream netlib project documents this;
-see its own README for a self-hosted signaling service).
+You need a netlib-compatible signaling server reachable at that URL — WebRTC peers can't find each
+other or exchange connection info without one. This repo includes everything to self-host one:
+see [`netlib-signaling/`](netlib-signaling/) for the Go source, build/run instructions (systemd,
+Docker, or plain `go run`), the Postgres note (the binary migrates its own schema — no manual step
+needed), and the optional TURN/coturn setup for players behind strict NATs.
 
 ## Deployment
 
@@ -165,6 +166,7 @@ vendor/netlib.js          built netlib library this adapter depends on
 default_map.evmap, maps.json, weapons.json   map/weapon data (see note below)
 scripts/                 the test suite (test_*.js) plus one shared test helper
 deploy/                  VPS provisioning, sync, TLS, and admin-tunnel scripts
+netlib-signaling/        self-hostable signaling server for the optional WebRTC transport
 ```
 
 ## A note on the data files
