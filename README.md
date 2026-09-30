@@ -67,9 +67,10 @@ npx playwright install chromium
 ## Connecting a client
 
 This server implements ev.io's own wire protocol, so it's the *client* that needs to be told to
-point somewhere other than the official servers — this repo doesn't include or modify any client.
-That's a separate, client-side concern (typically a userscript with a "custom server address"
-field); wiring one up is outside this repo's scope.
+point somewhere other than the official servers. [`userscript/`](userscript/) has a Tampermonkey
+userscript that does exactly that — official play stays the default, with a gear-menu button to
+switch. See [`userscript/README.md`](userscript/README.md) for installation and how it picks
+between the WebSocket and WebRTC transports.
 
 ## Configuration
 
@@ -174,6 +175,7 @@ default_map.evmap, maps.json, weapons.json   map/weapon data (see note below)
 scripts/                 the test suite (test_*.js) plus one shared test helper
 deploy/                  VPS provisioning, sync, TLS, and admin-tunnel scripts
 netlib-signaling/        self-hostable signaling server for the optional WebRTC transport
+userscript/              the client-side userscript that points a browser at this server
 ```
 
 ## A note on the data files

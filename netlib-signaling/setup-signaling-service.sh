@@ -86,12 +86,20 @@ sudo systemctl is-active netlib-signaling.service && echo "netlib-signaling is a
   exit 1
 }
 
-say "Caddy: add /netlib/* alongside the game server's existing routes"
+say "Caddy: add /netlib/* and the browser client alongside the game server's existing routes"
 cat <<CADDYEOF
 Add this block to your Caddyfile (see the main repo's deploy/tls.sh for the rest of it):
 
     handle_path /netlib/* {
         reverse_proxy 127.0.0.1:8090
+    }
+
+    # netlib's BROWSER build (this directory's static/netlib-client.js) — the userscript's
+    # @require loads it from here. Served as a static file, not proxied: it's a static asset
+    # with no server-side logic of its own.
+    handle /netlib-client.js {
+        root * ${APP_DIR}/static
+        file_server
     }
 
 handle_path strips the /netlib prefix before proxying, so the signaling server itself never
@@ -102,7 +110,9 @@ needs to know it's mounted under a subpath. Then:
 CADDYEOF
 
 say "Done"
-echo "Once Caddy is updated, the signaling server is reachable at:"
-echo "  wss://${DOMAIN}/netlib/v0/signaling"
-echo "  https://${DOMAIN}/netlib/health"
-echo "  https://${DOMAIN}/netlib/ready"
+echo "Once Caddy is updated:"
+echo "  signaling server: wss://${DOMAIN}/netlib/v0/signaling"
+echo "  health/ready:      https://${DOMAIN}/netlib/health , /netlib/ready"
+echo "  browser client:    https://${DOMAIN}/netlib-client.js"
+echo ""
+echo "Put that last URL in the userscript's @require line (see ../README.md's client section)."

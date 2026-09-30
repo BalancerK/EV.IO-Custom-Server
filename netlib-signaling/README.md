@@ -11,8 +11,10 @@ This is a vendored, lightly modified fork of [proofnetworks/netlib](https://gith
 for exactly what was changed and why (mainly: generic coturn TURN credentials instead of being
 locked to Cloudflare Calls). Licensed ISC — see [`LICENSE`](LICENSE).
 
-You only need any of this if you want `EVIO_NETLIB_ENABLED=1` on the main server. It's entirely
-optional; the default WebSocket transport works with none of this.
+You need this if you want `EVIO_NETLIB_ENABLED=1` on the main server — which matters more than it
+might sound, since the userscript's gear menu defaults new players to the WebRTC transport. Anyone
+who hasn't set this up yet can still switch to WebSocket from the gear menu in the meantime; the
+default WS transport works with none of this.
 
 ## What you need to run it
 
@@ -69,6 +71,15 @@ optional; the default WebSocket transport works with none of this.
    ```bash
    ENV=local ADDR=127.0.0.1:8090 go run ./cmd/signaling
    ```
+
+4. **The browser client library.** `static/netlib-client.js` (already built, ~31KB) is netlib's
+   browser bundle — the userscript's `@require` loads it directly. `setup-signaling-service.sh`
+   serves it via Caddy alongside the signaling server (see the block it prints). It's a build
+   artifact of `lib/legacy.ts` in the same upstream/vendored netlib project the signaling server's
+   Go source comes from (see `VENDORED.md`) — that TypeScript source isn't included in this repo
+   to avoid bringing in a whole separate JS build toolchain for a file that rarely needs changing;
+   rebuild it from the upstream/vendored project (`parcel build`, then copy `dist/legacy.js` here)
+   if you ever need to.
 
 ## Environment variables
 
