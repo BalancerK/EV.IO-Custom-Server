@@ -30,7 +30,8 @@ Click the gear icon (⚙) next to **Join Test Server** to open the config panel:
   [netlib-signaling](../netlib-signaling/) deployment. There's no working default for this one
   (unlike the WS address) — a netlib signaling URL always has to be a real `wss://` endpoint, even
   for local testing, so it has to be your own, and it needs that deployment to exist first (see
-  below).
+  below). Only shown when **Transport** is set to `WebRTC (UDP)` — it's hidden otherwise so a
+  WebSocket player never has to wonder whether they need to fill it in too.
 
 Hit **Save**. If you're already on the test server it reconnects automatically; otherwise the new
 settings just take effect next time you click **Join Test Server**.

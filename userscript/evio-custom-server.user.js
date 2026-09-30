@@ -1223,6 +1223,10 @@
         wsInput.placeholder = 'host:port';
         wsInput.style.cssText = fieldStyle;
 
+        // Grouped in its own container so both the label and the input hide together — only
+        // relevant (and only shown) while WebRTC is the selected transport, to avoid a WS-only
+        // player wondering what this field is or whether they need to fill it in too.
+        var netlibGroup = document.createElement('div');
         var netlibLab = document.createElement('div');
         netlibLab.textContent = 'WebRTC signaling URL';
         netlibLab.style.cssText = miniLab;
@@ -1230,6 +1234,14 @@
         netlibInput.value = netlibUrl();
         netlibInput.placeholder = 'wss://your-domain/netlib/v0/signaling';
         netlibInput.style.cssText = fieldStyle;
+        netlibGroup.appendChild(netlibLab);
+        netlibGroup.appendChild(netlibInput);
+
+        function updateFieldVisibility() {
+            netlibGroup.style.display = transSelect.value === 'netlib' ? 'block' : 'none';
+        }
+        transSelect.onchange = updateFieldVisibility;
+        updateFieldVisibility();
 
         var msg = document.createElement('div');
         msg.style.cssText = 'margin-top:6px;min-height:16px;font-size:12px;color:#90a4ae;';
@@ -1279,6 +1291,7 @@
                 transSelect.value = transport();
                 wsInput.value = hostPort();
                 netlibInput.value = netlibUrl();
+                updateFieldVisibility();
                 wsInput.focus();
             }
         };
@@ -1286,7 +1299,7 @@
         panel.appendChild(lab);
         panel.appendChild(transLab); panel.appendChild(transSelect);
         panel.appendChild(wsLab); panel.appendChild(wsInput);
-        panel.appendChild(netlibLab); panel.appendChild(netlibInput);
+        panel.appendChild(netlibGroup);
         panel.appendChild(msg); panel.appendChild(save);
         bar.appendChild(gear); bar.appendChild(join);
         paint();
