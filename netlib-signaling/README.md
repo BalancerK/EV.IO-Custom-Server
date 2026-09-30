@@ -11,10 +11,9 @@ This is a vendored, lightly modified fork of [proofnetworks/netlib](https://gith
 for exactly what was changed and why (mainly: generic coturn TURN credentials instead of being
 locked to Cloudflare Calls). Licensed ISC — see [`LICENSE`](LICENSE).
 
-You need this if you want `EVIO_NETLIB_ENABLED=1` on the main server — which matters more than it
-might sound, since the userscript's gear menu defaults new players to the WebRTC transport. Anyone
-who hasn't set this up yet can still switch to WebSocket from the gear menu in the meantime; the
-default WS transport works with none of this.
+You only need any of this if you want `EVIO_NETLIB_ENABLED=1` on the main server and the WebRTC
+option in the userscript's gear menu. It's entirely optional — WebSocket is the default transport
+on both sides and needs none of this.
 
 ## What you need to run it
 

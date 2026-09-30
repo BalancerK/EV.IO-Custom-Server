@@ -10,45 +10,53 @@ infrastructure. **Official play is the default** — nothing is touched until yo
 1. Install Tampermonkey (or Violentmonkey) in your browser.
 2. Create a new script and paste in [`evio-custom-server.user.js`](evio-custom-server.user.js), or
    install it from a raw URL if you're hosting this repo somewhere Tampermonkey can fetch it from.
-3. **If you want the WebRTC transport (the default), edit the `@require` line first** — see
-   [Setting up WebRTC](#setting-up-webrtc) below. If you skip this, WebRTC fails closed with a
-   clear console error and you can still play over WebSocket from the gear menu.
-4. Visit ev.io. A small button bar appears; click the gear icon to configure your server, then
-   **Join Test Server**.
+3. Visit ev.io. A small button bar appears; click the gear icon to set the server's WebSocket
+   `host:port`, then **Join Test Server**. That's it for the default (WebSocket) transport —
+   nothing else to set up.
+4. Want the WebRTC transport instead? See [Setting up WebRTC](#setting-up-webrtc) below — it needs
+   a bit more, since (unlike WebSocket) there's a second service to deploy first.
 
 ## The gear menu
 
 Click the gear icon (⚙) next to **Join Test Server** to open the config panel:
 
-- **Transport** — `WebRTC (UDP)` (default) or `WebSocket`. Switch any time; both addresses below
+- **Transport** — `WebSocket` (default) or `WebRTC (UDP)`. Switch any time; both addresses below
   are remembered independently, so switching back and forth never means retyping either one.
 - **WebSocket address** — `host:port` of the server's WS listener (e.g. `127.0.0.1:8080` for a
   local server, or your VPS's `host:port` — see the main repo's `deploy/README.md`). Loopback
-  addresses use `ws://`; anything else uses `wss://` automatically.
+  addresses use `ws://`; anything else uses `wss://` automatically. Works the moment the server is
+  running — nothing else to configure.
 - **WebRTC signaling URL** — the full `wss://.../v0/signaling` URL of your
   [netlib-signaling](../netlib-signaling/) deployment. There's no working default for this one
   (unlike the WS address) — a netlib signaling URL always has to be a real `wss://` endpoint, even
-  for local testing, so it has to be your own.
+  for local testing, so it has to be your own, and it needs that deployment to exist first (see
+  below).
 
 Hit **Save**. If you're already on the test server it reconnects automatically; otherwise the new
 settings just take effect next time you click **Join Test Server**.
 
 ## Setting up WebRTC
 
-The userscript's `@require` line loads netlib's browser client library, which Tampermonkey fetches
-once at install/update time — it has to point at a real URL:
+This is opt-in, and needs more than flipping the gear-menu dropdown: WebRTC has no server-side
+default the way WebSocket does, because it needs a whole second service — see
+[netlib-signaling](../netlib-signaling/) — to actually exist first. Skip this section entirely if
+WebSocket is working fine for you; there's no benefit to WebRTC beyond better behavior on lossy
+connections (it avoids TCP head-of-line blocking).
 
-```
-// @require      https://your-netlib-signaling-domain.example/netlib-client.js
-```
+1. Deploy [netlib-signaling](../netlib-signaling/) (its own README covers this).
+2. The userscript's `@require` line loads netlib's browser client library, which Tampermonkey
+   fetches once at install/update time — it has to point at a real URL:
+   ```
+   // @require      https://your-netlib-signaling-domain.example/netlib-client.js
+   ```
+   Change `your-netlib-signaling-domain.example` to wherever you deployed netlib-signaling — it
+   serves this exact file (see that directory's `setup-signaling-service.sh`, which prints the
+   Caddy block for it).
+3. Set the matching **WebRTC signaling URL** in the gear menu (same domain, `/netlib/v0/signaling`
+   path), and switch **Transport** to `WebRTC (UDP)`.
 
-Change `your-netlib-signaling-domain.example` to wherever you deployed
-[netlib-signaling](../netlib-signaling/) — it serves this exact file (see that directory's
-`setup-signaling-service.sh`, which prints the Caddy block for it). Then set the matching
-**WebRTC signaling URL** in the gear menu (same domain, `/netlib/v0/signaling` path).
-
-Don't want WebRTC at all? Leave the `@require` line as the placeholder and just use `WebSocket` in
-the gear menu — the WS transport needs none of this.
+Until you do all three, WebRTC fails closed with a clear console error — WebSocket keeps working
+regardless, since the two transports don't depend on each other at all.
 
 ## What else this script does
 

@@ -73,12 +73,13 @@
             region: q.get('region') || localStorage.getItem('evioCustomRegion') || 'custom',
             gamemode: q.get('mode') || localStorage.getItem('evioCustomMode') || 'deathmatch',
             map: q.get('map') || localStorage.getItem('evioCustomMap') || '',
-            // netlib/WebRTC transport — the DEFAULT transport: routes the game socket over a
-            // WebRTC data channel instead of raw WebSocket, to avoid TCP head-of-line blocking on
-            // lossy connections (the whole reason this transport exists). 'ws' remains available
-            // as a fallback (switch it in the gear menu, or ?transport=ws) for a server that
-            // hasn't set up netlib-signaling, or while debugging.
-            transport: q.get('transport') || localStorage.getItem('evioCustomTransport') || 'netlib',
+            // 'ws' is the default — it works against a server the moment it's running, no extra
+            // setup. netlib/WebRTC (routes the game socket over a WebRTC data channel instead of
+            // raw WebSocket, to avoid TCP head-of-line blocking on lossy connections) is opt-in:
+            // switch to it in the gear menu, or ?transport=netlib — but it also needs a
+            // netlib-signaling deployment on the server side (see netlib-signaling/README.md) and
+            // the @require line pointed at it, neither of which exist until you set them up.
+            transport: q.get('transport') || localStorage.getItem('evioCustomTransport') || 'ws',
             netlibGameId: q.get('netlibGameId') || localStorage.getItem('evioCustomNetlibGameId')
                 || '0d6a3b8e-6b8b-4f0a-9a2b-3a6e7b7a2b39', // must match the server's netlibGameId setting
             // No default here on purpose — unlike the WS address (loopback is a real, working
@@ -1127,8 +1128,8 @@
 
     function url()  { return localStorage.getItem(K_URL) || DEFAULT_URL; }
     function isOn() { return localStorage.getItem(K_ON) === '1'; }
-    // 'netlib' (WebRTC/UDP) is the default transport — see readCustomConfig's own comment for why.
-    function transport() { return localStorage.getItem(K_TRANSPORT) || 'netlib'; }
+    // 'ws' is the default transport — see readCustomConfig's own comment for why.
+    function transport() { return localStorage.getItem(K_TRANSPORT) || 'ws'; }
     function netlibUrl()  { return localStorage.getItem(K_NETLIB_URL) || ''; }
 
     function hostPort() {
@@ -1207,7 +1208,7 @@
         transLab.style.cssText = miniLab + 'margin-top:0;';
         var transSelect = document.createElement('select');
         transSelect.style.cssText = fieldStyle;
-        [['netlib', 'WebRTC (UDP) — default'], ['ws', 'WebSocket']].forEach(function (opt) {
+        [['ws', 'WebSocket — default'], ['netlib', 'WebRTC (UDP)']].forEach(function (opt) {
             var o = document.createElement('option');
             o.value = opt[0]; o.textContent = opt[1];
             transSelect.appendChild(o);
