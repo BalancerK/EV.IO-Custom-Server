@@ -163,6 +163,7 @@ async function startNetlibListener(opts) {
     gameId,
     signalingUrl,
     maxPlayers = 32,
+    hostName,
     onConnection,
     log = console.log,
     logError = console.error,
@@ -238,7 +239,7 @@ async function startNetlibListener(opts) {
 
   log(`[netlib] ready, peer id = ${network.id}`);
 
-  const lobbyCode = await joinOrCreateOwnLobby(network, { maxPlayers, log, logError });
+  const lobbyCode = await joinOrCreateOwnLobby(network, { maxPlayers, hostName, log, logError });
   log(`[netlib] hosting lobby ${lobbyCode} as the authoritative peer (id ${network.id})`);
 
   return {
@@ -259,7 +260,7 @@ async function startNetlibListener(opts) {
 // which case this retries a few times with a short backoff rather than silently falling back to
 // joining an unrelated lobby, which would be a real authority-model change, not a transient
 // hiccup.
-async function joinOrCreateOwnLobby(network, { maxPlayers, log, logError }) {
+async function joinOrCreateOwnLobby(network, { maxPlayers, hostName, log, logError }) {
   const attempts = 5;
   for (let i = 0; i < attempts; i++) {
     const code = await network.create({
@@ -272,7 +273,12 @@ async function joinOrCreateOwnLobby(network, { maxPlayers, log, logError }) {
       // customData.serverPeerId verification every client performs after list()+join().
       public: true,
       canUpdateBy: 'creator',
-      customData: { app: LOBBY_APP_MARKER, serverPeerId: network.id },
+      customData: {
+        app: LOBBY_APP_MARKER, serverPeerId: network.id,
+        // Read by any lobby-browser the same way — e.g. the EV.IO UI Enhancer extension's own
+        // Self-Hosted tab, which displays customData.hostName for a player-hosted lobby too.
+        hostName: hostName || undefined,
+      },
     });
     if (code) return code;
     logError(`[netlib] create() attempt ${i + 1}/${attempts} failed, retrying shortly`);

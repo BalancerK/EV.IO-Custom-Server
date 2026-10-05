@@ -11,7 +11,7 @@
 # afternoon). map_cache is excluded because it regenerates itself and is >100 MB.
 set -euo pipefail
 
-VPS_HOST="${VPS_HOST:?set VPS_HOST to your server's IP or hostname}"
+VPS_HOST="${VPS_HOST:?set VPS_HOST to the server IP or hostname}"
 VPS_USER="${VPS_USER:-gameserver}"
 VPS_PORT="${VPS_PORT:-22}"
 APP_DIR="${APP_DIR:-/opt/evio}"

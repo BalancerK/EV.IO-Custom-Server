@@ -290,6 +290,23 @@ func (s *PostgresStore) LeaveLobby(ctx context.Context, game, lobbyCode, peerID 
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
+
+	// Upstream leaves an emptied lobby's row in place for the periodic CleanEmptyLobbies sweep
+	// (every LobbyCleanInterval, only touching rows idle past LobbyCleanThreshold — 30 minutes /
+	// 24 hours by default) to pick up eventually. That's much too slow for a lobby whose whole
+	// lifetime is "one host's browser tab is open": ListLobbies has no playerCount filter of its
+	// own, so a lobby a host just left stays fully visible to everyone calling list() for up to a
+	// day. Deleting it here the moment it empties, right after a clean leave, is what actually
+	// makes "closed the tab -> gone from the list" true on the timescale a caller would expect.
+	_, err = s.DB.Exec(ctx, `
+		DELETE FROM lobbies
+		WHERE code = $1
+		AND game = $2
+		AND peers = '{}'
+	`, lobbyCode, game)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	return nil
 }
 
@@ -573,6 +590,14 @@ func (s *PostgresStore) ClaimNextTimedOutPeer(ctx context.Context, threshold tim
 	}
 
 	if err = rows.Err(); err != nil {
+		return "", false, nil, err
+	}
+
+	// Same reasoning as LeaveLobby's own cleanup: a lobby this timed-out peer was the last
+	// member of should not wait on the 30-min/24h CleanEmptyLobbies sweep to actually disappear
+	// from list() — delete it now, in this same transaction, now that `rows` above is fully
+	// consumed (pgx doesn't allow a second query on the same tx while a prior one is still open).
+	if _, err = tx.Exec(ctx, `DELETE FROM lobbies WHERE peers = '{}'`); err != nil {
 		return "", false, nil, err
 	}
 

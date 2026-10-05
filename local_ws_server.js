@@ -118,6 +118,20 @@ let NETLIB_SIGNALING_URL = S.define({
     + "Loopback by default since production reaches it through Caddy at "
     + "wss://<domain>/netlib/v0/signaling — set this to that public URL for a real deploy.",
 }, (v) => { NETLIB_SIGNALING_URL = v; });
+// Shown in any client's lobby browser that lists lobbies carrying LOBBY_APP_MARKER — the EV.IO UI
+// Enhancer extension's own lobby list reads this exact field (customData.hostName) the identical
+// way for its own, locally-hosted lobbies, so a VPS-hosted one and a player's own show up the
+// same way. Fixed per deployment, not live — see the setting's own desc for why.
+let NETLIB_HOST_NAME = S.define({
+  key: "netlibHostName", env: "EVIO_NETLIB_HOST_NAME", type: "string",
+  def: "BalancerK Lobby 1", live: false,
+  category: "Server", label: "netlib lobby display name",
+  desc: "customData.hostName on the netlib lobby this server creates — what shows up in a "
+    + "client's lobby browser (e.g. the EV.IO UI Enhancer extension's Self-Hosted tab). Fixed "
+    + "per deployment like netlibGameId/netlibSignalingUrl above — the lobby's customData is "
+    + "set once at network.create() time, so changing this live would not rename an "
+    + "already-running lobby.",
+}, (v) => { NETLIB_HOST_NAME = v; });
 // ── Envelope `sync` — the server→client CLOCK-SYNC channel ───────────────────────────────
 // The packet is [sync, clientTick, body]. `sync` is NOT a server tick counter: the client
 // assigns it straight to `lagAccumulator` (bundle :27351) and derives its own tick period from
@@ -272,6 +286,21 @@ let TICK_SCHEDULER = S.define({
       + "cores — for parity captures only. interval = legacy setInterval, which on Windows "
       + "actually runs at 16Hz because the OS timer granularity is 15.625ms.",
 }, (v) => { TICK_SCHEDULER = v; });
+// A dedicated VPS deployment should stay "warm" (match timer/bots/map state ticking) even between
+// players, the same way the official servers do. The browser extension host is the opposite case
+// — it deliberately stops the tick loop with zero accepted sessions to save CPU/battery on
+// whatever machine happens to be hosting it (see maybeStopGameLoop below and the extension's own
+// background.js teardownHosting() comment). Rather than branch on "am I the VPS or the
+// extension" directly, this just defaults from NODE_ENV=production — true on the VPS (the
+// systemd unit already sets it), false in the extension (nothing ever sets NODE_ENV there) —
+// so the two deployments get the right behavior with no separate flag to remember to set.
+let ALWAYS_RUN_TICK = S.define({
+  key: "alwaysRunTick", env: "EVIO_ALWAYS_RUN_TICK", type: "bool",
+  def: process.env.NODE_ENV === "production", live: false,
+  category: "Server", label: "Always run the tick loop",
+  desc: "Keep the global tick loop running even with zero connected players, instead of "
+      + "stopping it when the lobby empties. Defaults on when NODE_ENV=production.",
+}, (v) => { ALWAYS_RUN_TICK = v; });
 let LOG_ALL_INPUT = S.define({
   key: "logAllInput", env: "EVIO_INPUT_LOG_ALL", type: "bool", def: false,
   category: "Debug", label: "Log every input frame",
@@ -8630,19 +8659,26 @@ const _live = { sessions: null, startedAt: 0, globalTick: 0, tickStamps: [], dra
 // settings.local.json loaded at require time) is picked up by the one-time reconcileBotCount()
 // call after startServer() in the require.main bootstrap at the bottom of this file — the same
 // two-step pattern startupMap already uses for the same reason (nothing exists yet to apply it to).
+// Recomputes the live count on EVERY iteration rather than fixing a loop bound up front —
+// required for reentrancy, not just defensive: spawnBot() itself calls maybeStartGameLoop(),
+// which (see that function's own comment) calls this same reconciler again to re-apply the
+// configured count whenever the loop (re)starts. The FIRST bot this function spawns, starting
+// from a stopped loop, triggers exactly that nested call mid-loop — confirmed live (on the
+// extension host, where the loop actually stops between sessions) as 3 bots spawned for a
+// target of 2 before this fix, because a fixed "spawn want-have times" bound has no way to
+// notice a nested call already reached the target.
 function reconcileBotCount() {
   if (!_live.spawnBot) return;
   // Only the plain gun-bot pool — sword bots are a SEPARATE count (reconcileSwordBotCount), each
   // reconciler must only ever spawn/remove from its own kind or the two counts fight each other.
-  const bots = _live.listBots().filter((b) => !b.isSwordBot);
-  const have = bots.length, want = BOT_COUNT;
-  if (have < want) {
-    for (let i = 0; i < want - have; i++) _live.spawnBot({ level: BOT_LEVEL });
-  } else if (have > want) {
+  const liveBots = () => _live.listBots().filter((b) => !b.isSwordBot);
+  while (liveBots().length < BOT_COUNT) _live.spawnBot({ level: BOT_LEVEL });
+  const excess = liveBots().length - BOT_COUNT;
+  if (excess > 0) {
     // Map iteration order is insertion order, so slice(want) is the MOST RECENTLY added bots —
     // removing those (not an arbitrary or oldest pick) leaves the longest-running bots undisturbed
     // when an admin dials the count down.
-    for (const b of bots.slice(want)) _live.removeBot(b.playerId);
+    for (const b of liveBots().slice(BOT_COUNT)) _live.removeBot(b.playerId);
   }
 }
 
@@ -8650,12 +8686,11 @@ function reconcileBotCount() {
 // OWN difficulty level (SWORD_BOT_LEVEL), independent of the plain gun-bot pool's BOT_LEVEL.
 function reconcileSwordBotCount() {
   if (!_live.spawnBot) return;
-  const bots = _live.listBots().filter((b) => b.isSwordBot);
-  const have = bots.length, want = SWORD_BOT_COUNT;
-  if (have < want) {
-    for (let i = 0; i < want - have; i++) _live.spawnBot({ level: SWORD_BOT_LEVEL, swordOnly: true });
-  } else if (have > want) {
-    for (const b of bots.slice(want)) _live.removeBot(b.playerId);
+  const liveBots = () => _live.listBots().filter((b) => b.isSwordBot);
+  while (liveBots().length < SWORD_BOT_COUNT) _live.spawnBot({ level: SWORD_BOT_LEVEL, swordOnly: true });
+  const excess = liveBots().length - SWORD_BOT_COUNT;
+  if (excess > 0) {
+    for (const b of liveBots().slice(SWORD_BOT_COUNT)) _live.removeBot(b.playerId);
   }
 }
 
@@ -9832,17 +9867,64 @@ function startServer() {
     lastGlobalWallMs = Date.now();
     gameLoopInterval = startTickScheduler();
     console.log(`[evio-local] global game loop started tickMs=${TICK_MS} scheduler=${TICK_SCHEDULER} realtimeDt=${REALTIME_SIM_DT} tickLogEvery=${TICK_LOG_EVERY} sessions=${sessions.size}`);
+    // Re-applies the configured bot counts every time the loop (re)starts, not just once at
+    // server boot. Needed on the extension host specifically: resetServerState() (see
+    // maybeStopGameLoop) removes every bot when the lobby empties, so without this, a
+    // configured botCount/swordBotCount would only ever be honored the FIRST time hosting
+    // started in a given browser session. Both reconcile functions are idempotent no-ops when
+    // the current count already matches, so this is free on THIS deployment's own first-boot
+    // call from the bpw.ready chain (same two functions, same place they've always been called
+    // from) — kept in sync with the extension's port of this file for the same reason as
+    // resetServerState/ALWAYS_RUN_TICK above.
+    reconcileBotCount();
+    reconcileSwordBotCount();
+  }
+
+  // Only ever runs right after the tick loop itself has already stopped (see maybeStopGameLoop
+  // below) — moot on THIS deployment while ALWAYS_RUN_TICK defaults on via NODE_ENV=production
+  // (that branch never reaches here), but kept in sync with the extension's own port of this
+  // file in case anyone ever runs a Node deployment with it off, where the same staleness
+  // problem (leftover bots/entities/pickups/round state from a previous empty-lobby period)
+  // would otherwise apply equally.
+  function resetServerState() {
+    for (const [playerId, session] of [...sessions.entries()]) {
+      if (!session) { sessions.delete(playerId); continue; }
+      const ps = session.playerState && session.playerState._ps;
+      if (session.isBot) {
+        removeBot(playerId); // own peer-departure bookkeeping; deletes from `sessions` itself
+      } else {
+        // Defensive: a non-bot entry surviving to this point would mean .accepted was false
+        // (otherwise anyRealPlayer in maybeStopGameLoop would have been true) — a half-joined
+        // straggler, not a real player to preserve.
+        sessions.delete(playerId);
+      }
+      if (ps) { try { _physWorldPlayers.delete(ps.Q7q6byi); } catch (e) { /* ignore */ } }
+    }
+    _syncPhysWorldCapsules(null);
+    clearAllEntities("server reset — no real players left");
+    _resetPickupState();
+    match.round = 1;
+    resetMatchTimer();
+    console.log("[evio-local] server state reset (sessions cleared, bots removed, entities/pickups/match reset)");
   }
 
   function maybeStopGameLoop() {
     if (!gameLoopInterval) return;
-    const anyAccepted = Array.from(sessions.values()).some(s => s.accepted);
-    if (!anyAccepted) {
+    if (ALWAYS_RUN_TICK) return;
+    // Bots live in this same sessions Map with accepted=true (they never go through a real
+    // handshake, but are seeded in as already-accepted) — a bare .accepted check never goes
+    // false while any bot is still around, so this stop condition would never fire once a bot
+    // had ever been added, real player or not. isBot excludes them from counting as "someone's
+    // actually playing." (Moot on this deployment while ALWAYS_RUN_TICK defaults on via
+    // NODE_ENV=production, but correct regardless of that setting.)
+    const anyRealPlayer = Array.from(sessions.values()).some(s => s.accepted && !s.isBot);
+    if (!anyRealPlayer) {
       gameLoopInterval();          // stop handle returned by startTickScheduler
       gameLoopInterval = null;
       globalTick = 0;
       _live.tickStamps.length = 0; // don't average the stopped period into the next run's rate
-      console.log("[evio-local] global game loop stopped (no accepted players)");
+      console.log("[evio-local] global game loop stopped (no real players — bots alone don't keep it running)");
+      resetServerState();
     }
   }
 
@@ -10782,6 +10864,10 @@ function startServer() {
 
   wss.on("connection", handleConnection);
 
+  // See ALWAYS_RUN_TICK's own comment — a dedicated deployment stays warm from boot rather than
+  // only starting the tick loop once the first player joins.
+  if (ALWAYS_RUN_TICK) maybeStartGameLoop();
+
   // netlib/WebRTC transport — additive, gated, off by default (see server/netlib_adapter.js and
   // the netlib migration plan). Every peer it hands us goes through the identical
   // handleConnection() path above; the adapter's whole job is making a netlib peer look enough
@@ -10793,6 +10879,7 @@ function startServer() {
       gameId: NETLIB_GAME_ID,
       signalingUrl: NETLIB_SIGNALING_URL,
       maxPlayers: MAX_PLAYERS,
+      hostName: NETLIB_HOST_NAME,
       onConnection: handleConnection,
     })
       .then((handle) => { _live.netlib = handle; })
