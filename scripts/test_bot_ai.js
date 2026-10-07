@@ -11,6 +11,12 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// Real-player "target" fixtures here are built via createPlayerSimState with no "enter the
+// match" step — a held player ("Hold new players until they click to play", now the default)
+// correctly is NOT a valid combat target (a spectator can't be shot), which would zero out every
+// visibility/damage assertion in this file. That's real, correct game logic, just not what this
+// file tests (bot targeting/combat behavior once a target IS actually playing).
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const fs = require('fs');
 const path = require('path');

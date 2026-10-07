@@ -16,6 +16,11 @@ process.env.EVIO_ADMIN = '0';
 process.env.EVIO_LOCAL_HOST = '127.0.0.1';
 process.env.EVIO_LOCAL_PORT = process.env.EVIO_LOCAL_PORT || '18511';
 process.env.EVIO_JOIN_DEADLINE = '0';
+// "Hold new players until they click to play" (now the default) is unrelated to this file's own
+// bot-admin assertions, but a held real player can throw off anything that iterates sessions
+// expecting a bot to exist alongside an actually-playing one. Disabled for the same reason the
+// other bot test files are.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');

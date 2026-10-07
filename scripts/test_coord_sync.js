@@ -40,6 +40,13 @@ process.env.EVIO_LOCAL_HOST  = process.env.EVIO_LOCAL_HOST  || '127.0.0.1';
 process.env.EVIO_LOCAL_PORT  = process.env.EVIO_LOCAL_PORT  || '18091';
 process.env.EVIO_TICK_MS     = process.env.EVIO_TICK_MS     || '100';
 process.env.EVIO_COORD_LOG   = '0';  // suppress coord log noise in this test
+// This test measures tick-to-tick position deltas from a player's very first input, so it isn't
+// written to expect the one-time spectator -> spawn teleport "Hold new players until they click
+// to play" (now the default) inserts the moment a held player's first input exits the hold — a
+// real, correct, one-time discontinuity (see handleLobbyIntent's play branch / the fallback at
+// "LOBBY_INTENT_FALLBACK"), not a sync bug, but exactly the kind of jump this test exists to catch
+// for everything else. Disabled here so it keeps testing what it was built to test.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const WebSocket   = require('ws');
 const { encode, decode } = require('@msgpack/msgpack');

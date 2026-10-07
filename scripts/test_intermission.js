@@ -76,6 +76,7 @@ const frame = (held = []) => [0, [held, [], [], [0, 0]]];
     // while the match timer is <= 0.
     match.gameMode = 0;
     const st = srv.createPlayerSimState();
+    st._holdForPlay = false;   // this fixture represents a PLAYING player, not the join-hold itself
     const playing = [];
     srv.appendPlayerTickBody(playing, 'p', st);
     ok('opcode 168 is 0 while playing', opVal(playing, 168) === 0, String(opVal(playing, 168)));
@@ -243,7 +244,9 @@ const frame = (held = []) => [0, [held, [], [], [0, 0]]];
     ok('a held player is given no weapon slots', !entryOps(body).has(135),
       'the viewmodel is built from these and defaults to visible');
     const playingBody = [];
-    srv.appendPlayerTickBody(playingBody, 'p', srv.createPlayerSimState());
+    const playingSt = srv.createPlayerSimState();
+    playingSt._holdForPlay = false;   // this fixture represents a PLAYING player, not the join-hold itself
+    srv.appendPlayerTickBody(playingBody, 'p', playingSt);
     ok('a playing player still gets them', entryOps(playingBody).has(135));
 
     // ...and the weapon must come BACK on release. 127/128/135 are delta-emitted, so without forcing
@@ -281,8 +284,10 @@ const frame = (held = []) => [0, [held, [], [], [0, 0]]];
     };
     ok('a held player is never reconciled', srv.computeEchoTick(500, heldSess) === -1,
       `echo=${srv.computeEchoTick(500, heldSess)} — any real tick lets the prediction overwrite state 0`);
+    const playingSessState = srv.createPlayerSimState();
+    playingSessState._holdForPlay = false;   // this fixture represents a PLAYING player, not the join-hold itself
     const playingSess = {
-      sessionId: 'p2', playerState: srv.createPlayerSimState(),
+      sessionId: 'p2', playerState: playingSessState,
       lastClientTick: 500, lastProcessedClientTick: 500, _idleTicks: 0,
     };
     ok('a playing player still reconciles normally', srv.computeEchoTick(500, playingSess) === 500,
@@ -309,6 +314,7 @@ const frame = (held = []) => [0, [held, [], [], [0, 0]]];
 
     // Per-recipient: everyone actually playing must still see the real clock.
     const playing2 = srv.createPlayerSimState();
+    playing2._holdForPlay = false;   // this fixture represents a PLAYING player, not the join-hold itself
     srv.match.timer = 1234;
     ok('a playing player still sees the real timer',
       opVal(srv.buildTickBody('p', 5, playing2, null), 7) === 1234,
@@ -472,7 +478,7 @@ const frame = (held = []) => [0, [held, [], [], [0, 0]]];
       'the default must not change for players who are simply playing');
   }
 
-  console.log('\n── the held state is configurable, and the hold is off by default ──');
+  console.log('\n── the held state is configurable, and the join hold is on by default ──');
   {
     const e = S.list().find((x) => x.key === 'heldPlayerState');
     ok('heldPlayerState is a setting', !!e);
@@ -482,8 +488,12 @@ const frame = (held = []) => [0, [held, [], [], [0, 0]]];
     // camera and hides the real cause.
     ok('and defaults to 0 (the state that runs the flyover camera)', e && e.value === 0, String(e && e.value));
     const c = S.list().find((x) => x.key === 'clickToPlayJoin');
-    ok('the join hold itself is still OFF', c && c.value === false,
-      'the click is not on the wire — see probe:clicktoplay');
+    // Confirmed live against the real client (no false-start — it stays silent while held), so
+    // this now defaults ON (see CLICK_TO_PLAY's own comment). Every OTHER assertion in this file
+    // sets playerState._holdForPlay directly rather than relying on the setting's own default, so
+    // this is the only one actually exercising the default itself.
+    ok('the join hold itself defaults ON', c && c.value === true,
+      'the click is on the wire by default — see probe:clicktoplay');
   }
 
   match.gameMode = restore;

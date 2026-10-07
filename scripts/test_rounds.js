@@ -23,6 +23,13 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test inflicts damage/kills directly on playerStates built via createPlayerSimState, with
+// no "enter the match" step in between — applyDamage correctly REFUSES all damage for a held
+// player ("Hold new players until they click to play", now the default — see its own
+// "_holdForPlay" early-return comment), so every kill/death/score assertion here would silently
+// no-op without this. Real, correct behavior, just not what this file tests (kill/death/scoring
+// bookkeeping once a player IS in the match).
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 const S = require('../settings');
 const srv = require('../local_ws_server');
 

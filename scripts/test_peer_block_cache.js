@@ -24,6 +24,12 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test checks peer tick-body caching/position content on playerStates built via
+// createPlayerSimState, with no "enter the match" step in between — a held player ("Hold new
+// players until they click to play", now the default) streams as a spectator (zeroed position),
+// which would make several of this file's own position/cache-content assertions indistinguishable
+// from the held state rather than the caching bug they test for.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');

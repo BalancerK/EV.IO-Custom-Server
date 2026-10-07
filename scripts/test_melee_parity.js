@@ -16,6 +16,12 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test checks melee hit/damage on playerStates built via createPlayerSimState, with no
+// "enter the match" step in between — applyDamage correctly REFUSES all damage for a held player
+// ("Hold new players until they click to play", now the default — see its own "_holdForPlay"
+// early-return comment), so hit assertions here would silently fail without this. Real, correct
+// behavior, just not what this file tests (melee reach/hit parity once a player IS in the match).
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');
 const S = require('../settings');

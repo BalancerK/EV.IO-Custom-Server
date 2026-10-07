@@ -8,6 +8,11 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test checks pickup/weapon-slot streaming and damage on playerStates built via
+// createPlayerSimState, with no "enter the match" step in between — a held player ("Hold new
+// players until they click to play", now the default) streams no weapon slots at all and refuses
+// all damage, which would mask this file's own pickup/stack/deplete mechanics.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const fs = require('fs');
 const path = require('path');
@@ -80,43 +85,70 @@ function restoreRealPickupPoints() {
     ok('weaponClip for a nid with no pickupAmmo entry is unaffected', srv.weaponClip(4, p) > 2);
   }
 
-  console.log('\n── _grantPickupWeapon: NEW weapon adds a slot + auto-equips ──');
+  console.log('\n── _grantPickupWeapon, REAL PLAYER (isBot omitted): NEW weapon adds a slot, does NOT equip ──');
   {
+    // Reported live: picking up a weapon mid-fight yanked the gun already in hand out and replaced
+    // it — a real player now keeps whatever they're holding and switches to a pickup manually
+    // (processWeaponSwitch); see _grantPickupWeapon's own comment. Bots are the one exception
+    // (tested in their own section below), since nothing in their AI ever presses a switch action.
     const p = srv.createPlayerSimState({ x: 0, y: 0, z: 0 }, 'grantA');
-    p.equippedWeaponId = 4; p.weaponList = [4, 262]; p._ammoGunId = 4;
+    p.equippedWeaponId = 4; p.weaponList = [4, 262]; p._ammoGunId = 4; p.gunAmmo = 999999; p.backupWeaponId = -1;
     srv._grantPickupWeapon(p, 8);   // Rocket Launcher, pickUpSize 3, clipSize 1
     ok('pickupAmmo now has an entry for nid 8', Object.prototype.hasOwnProperty.call(p.pickupAmmo, 8));
     ok('weaponList now has 3 entries, primary and sword preserved, Rocket Launcher inserted at '
       + 'its OFFICIAL key-order rank (key 4, before the sword at key Z) — see WEAPON_CYCLE_RANK',
       JSON.stringify(p.weaponList) === JSON.stringify([4, 8, 262]), JSON.stringify(p.weaponList));
-    ok('auto-equips the picked-up weapon', p.equippedWeaponId === 8);
-    ok('_ammoGunId points at it too', p._ammoGunId === 8);
-    ok('the first magazine is sized (clipSize 1, capped by the pool of 3)', p.gunAmmo === 1);
+    ok('does NOT equip the picked-up weapon', p.equippedWeaponId === 4, String(p.equippedWeaponId));
+    ok('_ammoGunId is untouched', p._ammoGunId === 4, String(p._ammoGunId));
+    ok('gunAmmo (the equipped gun\'s magazine) is untouched', p.gunAmmo === 999999, String(p.gunAmmo));
     // pickupAmmo[nid] tracks the TOTAL rounds left — including whatever's currently chambered, not
     // a separate "reserve beyond the clip" figure. It starts at the full pickUpSize; only FIRING
     // decrements it (preTickFire); reloading redistributes chamber/reserve without touching the
     // total, so weaponClip's cap stays correct at every reload with no extra bookkeeping.
     ok('pickupAmmo[8] starts at the full pickUpSize (3), not reduced by the initial load',
       p.pickupAmmo[8] === 3, String(p.pickupAmmo[8]));
-    ok('backupWeaponId remembers what was equipped before', p.backupWeaponId === 4);
+    ok('backupWeaponId is untouched (no switch happened)', p.backupWeaponId === -1, String(p.backupWeaponId));
 
-    console.log('\n── a SECOND, DIFFERENT special weapon ADDS a slot rather than replacing the first ──');
+    console.log('\n── a SECOND, DIFFERENT special weapon ADDS a slot rather than replacing the first, still no equip ──');
     srv._grantPickupWeapon(p, 282);   // SMG — a genuinely different type
     ok('weaponList now has FOUR entries — both special weapons carried at once; SMG (key 6) ranks '
       + 'AFTER the sword (key Z), so it lands last, not before it',
       JSON.stringify(p.weaponList) === JSON.stringify([4, 8, 262, 282]), JSON.stringify(p.weaponList));
     ok('both pickupAmmo entries exist', p.pickupAmmo[8] === 3 && p.pickupAmmo[282] === 130,
       JSON.stringify(p.pickupAmmo));
-    ok('auto-equips the NEW one', p.equippedWeaponId === 282);
+    ok('still does not equip the new one either', p.equippedWeaponId === 4, String(p.equippedWeaponId));
 
-    console.log('\n── picking up the SAME type again STACKS ammo, does not re-equip or duplicate the slot ──');
-    p.equippedWeaponId = 4; p._ammoGunId = 4;   // switch back to primary first
+    console.log('\n── picking up the SAME type again STACKS ammo, still does not equip or duplicate the slot ──');
     srv._grantPickupWeapon(p, 8);   // grab a SECOND Rocket Launcher pickup
     ok('pickupAmmo[8] added the full pickUpSize again (3 + 3 = 6)', p.pickupAmmo[8] === 6,
       String(p.pickupAmmo[8]));
     ok('weaponList still has exactly 4 entries (no duplicate slot)',
       JSON.stringify(p.weaponList) === JSON.stringify([4, 8, 262, 282]), JSON.stringify(p.weaponList));
-    ok('does NOT re-equip — still on the primary the test switched to',
+    ok('still on the original primary — never equipped at any point',
+      p.equippedWeaponId === 4, String(p.equippedWeaponId));
+  }
+
+  console.log('\n── _grantPickupWeapon, BOT (isBot=true): NEW weapon adds a slot AND auto-equips ──');
+  {
+    // Bots have no concept of "manually switch later" — driveBotFrame never presses a switch
+    // action — so they keep the original immediate-equip behavior (see _grantPickupWeapon's own
+    // comment), otherwise botWeaponPickupsEnabled would be a dead setting.
+    const p = srv.createPlayerSimState({ x: 0, y: 0, z: 0 }, 'grantBot');
+    p.equippedWeaponId = 4; p.weaponList = [4, 262]; p._ammoGunId = 4;
+    srv._grantPickupWeapon(p, 8, true);   // Rocket Launcher, pickUpSize 3, clipSize 1
+    ok('weaponList now has 3 entries, same insertion rule as a real player',
+      JSON.stringify(p.weaponList) === JSON.stringify([4, 8, 262]), JSON.stringify(p.weaponList));
+    ok('auto-equips the picked-up weapon', p.equippedWeaponId === 8);
+    ok('_ammoGunId points at it too', p._ammoGunId === 8);
+    ok('the first magazine is sized (clipSize 1, capped by the pool of 3)', p.gunAmmo === 1);
+    ok('backupWeaponId remembers what was equipped before', p.backupWeaponId === 4);
+
+    srv._grantPickupWeapon(p, 282, true);   // SMG — a genuinely different type
+    ok('auto-equips the NEW one too', p.equippedWeaponId === 282);
+
+    p.equippedWeaponId = 4; p._ammoGunId = 4;   // switch back to primary first
+    srv._grantPickupWeapon(p, 8, true);   // grab a SECOND Rocket Launcher pickup — already carried
+    ok('does NOT re-equip — already-carried stacks never equip, only a genuinely NEW slot does',
       p.equippedWeaponId === 4, String(p.equippedWeaponId));
   }
 
@@ -301,6 +333,9 @@ function restoreRealPickupPoints() {
     const p = srv.createPlayerSimState({ x: 0, y: 0, z: 0 }, 'hudSwitch');
     p.equippedWeaponId = 4; p.weaponList = [4, 262]; p._ammoGunId = 4;
     srv._grantPickupWeapon(p, 8);   // Rocket Launcher: clipSize 1, pickUpSize 3
+    // A pickup no longer auto-equips for a real player (see _grantPickupWeapon) — switch to it
+    // explicitly, same as the player actually selecting it, before firing it in this test.
+    p.equippedWeaponId = 8; p._ammoGunId = 8; p.gunAmmo = srv.weaponClip(8, p);
     p.switchTimer = 0; p.fireCooldown = 0;
     srv.preTickFire(p, [[1, [[5], [], [], [0, 0]]]]);   // fire the one round in the mag
     ok('fired: magazine now 0, pool now 2', p.gunAmmo === 0 && p.pickupAmmo[8] === 2,

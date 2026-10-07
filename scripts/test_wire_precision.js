@@ -25,6 +25,12 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test checks position/yaw/pitch precision on a playerState built via createPlayerSimState,
+// with no "enter the match" step in between — a held player ("Hold new players until they click
+// to play", now the default) streams as a spectator, not at their real position, so every
+// precision assertion here would silently read back 0 without this. Real, correct behavior, just
+// not what this file tests (wire precision once a player IS in the match).
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');
 

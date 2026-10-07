@@ -8,6 +8,11 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test inflicts damage directly on playerStates built via createPlayerSimState, with no
+// "enter the match" step in between — applyDamage correctly REFUSES all damage for a held player
+// ("Hold new players until they click to play", now the default — see its own "_holdForPlay"
+// early-return comment), so the damage-lands assertions here would silently no-op without this.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');

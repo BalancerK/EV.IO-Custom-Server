@@ -28,6 +28,12 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test checks damage and echo-tick behavior on sessions built via createPlayerSimState, with
+// no "enter the match" step in between — a held player ("Hold new players until they click to
+// play", now the default) both refuses damage (applyDamage's own "_holdForPlay" early return) and
+// always echoes -1 (reconciliation is paused for a spectator), so this file's own idle/echo
+// assertions would be indistinguishable from that without this.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');

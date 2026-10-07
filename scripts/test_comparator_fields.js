@@ -26,6 +26,12 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test reads position/weapon fields off a playerState built via createPlayerSimState, with
+// no "enter the match" step in between — a held player ("Hold new players until they click to
+// play", now the default) streams as a spectator (zeroed position, no weapon), so several field
+// assertions here would silently read back wrong without this. Real, correct behavior, just not
+// what this file tests (comparator field wire values once a player IS in the match).
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');
 

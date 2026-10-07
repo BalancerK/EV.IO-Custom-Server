@@ -29,6 +29,13 @@
 'use strict';
 
 process.env.EVIO_ADMIN = '0';
+// This test checks weaponSlots delete/add streaming on a playerState built via
+// createPlayerSimState, with no "enter the match" step in between — appendPlayerTickBody
+// correctly emits NO weapon slots at all for a held player ("Hold new players until they click
+// to play", now the default — a spectator has no weapon), so every slot assertion here would
+// silently no-op without this. Real, correct behavior, just not what this file tests (weapon-swap
+// slot streaming once a player IS in the match).
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');
 

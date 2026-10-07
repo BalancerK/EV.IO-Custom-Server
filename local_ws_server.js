@@ -1259,15 +1259,16 @@ let INTERMISSION_TICKS = S.define({
 // The part the protocol does NOT carry is the click itself. Qxobfsk (the click handler) only tears
 // down the menu and locks the pointer — it sends nothing. So the only signal available to a server is
 // that the client STARTS SENDING INPUT once it is in the game. Whether the client is genuinely silent
-// beforehand is an empirical question about the real browser, which is why this defaults OFF until
-// it has been confirmed against one: if the client sends input while the overlay is up, the hold would
-// end instantly and the overlay would flash past.
+// beforehand was an empirical question about the real browser — confirmed live (no false-start, the
+// overlay holds correctly), so this now defaults ON. (If the client ever sends input while the
+// overlay is up on some other build, the hold would end instantly and the overlay would flash past —
+// worth rechecking if that's ever reported.) Bots are exempt regardless of this setting — see
+// spawnBot's own _holdForPlay override — since nothing could ever send the "click" on their behalf.
 let CLICK_TO_PLAY = S.define({
-  key: "clickToPlayJoin", env: "EVIO_CLICK_TO_PLAY", type: "bool", def: false,
+  key: "clickToPlayJoin", env: "EVIO_CLICK_TO_PLAY", type: "bool", def: true,
   category: "Gameplay", label: "Hold new players until they click to play",
   desc: "Join as a spectator watching the map, with the client's own CLICK TO PLAY overlay, and spawn "
-      + "on the first input. OFF until the 'is the client silent while held' question is settled — see "
-      + "probe:clicktoplay.",
+      + "on the first input. Bots always start in play regardless of this setting.",
 }, (v) => { CLICK_TO_PLAY = v; });
 // Which state a held player is put in. 3 shows CLICK TO PLAY + [ SPECTATE ]; 2 shows [ JOIN ] instead
 // and is what a player who has explicitly chosen to spectate should be moved to. Both give the
@@ -1801,7 +1802,7 @@ function _clearAllPickupWeapons(p) {
 // groups this way too (8 < 262 < 281), with no special-casing needed for it at all — it is simply
 // another member of the same sort, not a fixed anchor point.
 
-function _grantPickupWeapon(p, nid) {
+function _grantPickupWeapon(p, nid, isBot) {
   if (!p || !Number.isFinite(nid)) return;
   if (!p.pickupAmmo) p.pickupAmmo = {};
   const size = WEAPON_PICKUP_SIZE[nid];
@@ -1817,13 +1818,30 @@ function _grantPickupWeapon(p, nid) {
       if (p.weaponList[i] > nid) { insertAt = i; break; }
     }
     p.weaponList.splice(insertAt, 0, nid);
-    p.backupWeaponId = p.equippedWeaponId;
-    p.equippedWeaponId = nid;
-    p._ammoGunId = nid;
-    p.gunAmmo = weaponClip(nid, p);
-    p.reloadTicks = 0;
-    p.weaponSendCount = WEAPON_SEND_REPEAT_TICKS;
-    startWeaponSwitch(p);
+    // Deliberately does NOT auto-equip a REAL player — only adds it to weaponList.
+    // appendPlayerTickBody's weaponSlots (135) block streams every CARRIED weapon every tick
+    // regardless of which one is equipped, so the new weapon's icon/ammo shows up in the HUD
+    // immediately either way; this just stops it from yanking the gun out of the player's hands
+    // mid-fight. They keep whatever they're currently holding and switch to the pickup manually
+    // (cycle or direct-select, processWeaponSwitch) whenever they actually want it. No ammo init
+    // is needed here either — the per-tick equippedWeaponId/_ammoGunId sync a little further down
+    // (search "Keep the magazine pointed at the equipped gun") lazily sets up gunAmmo from
+    // pickupAmmo the moment the player actually switches to it, exactly like switching to any
+    // other carried gun.
+    //
+    // Bots are the one exception: driveBotFrame never presses a weapon-switch action (no cycle,
+    // no direct-select — bots just fire whatever's currently equipped), so without SOME equip
+    // path they would grab every pickup on the map and never fire a single one, making
+    // botWeaponPickupsEnabled a dead setting. Keep the original immediate-equip for them only.
+    if (isBot) {
+      p.backupWeaponId = p.equippedWeaponId;
+      p.equippedWeaponId = nid;
+      p._ammoGunId = nid;
+      p.gunAmmo = weaponClip(nid, p);
+      p.reloadTicks = 0;
+      p.weaponSendCount = WEAPON_SEND_REPEAT_TICKS;
+      startWeaponSwitch(p);
+    }
   }
   console.log(`[evio-local] weapon pickup: ${p.id || p._ownerSid} grabbed nid=${nid} `
     + `(+${grant}, ${alreadyCarried ? "stacked to" : "new slot,"} ${p.pickupAmmo[nid]} rounds total)`);
@@ -1845,12 +1863,17 @@ function processWeaponPickups(sessions, tick) {
     for (const s of sessions.values()) {
       if (!s || !s.accepted) continue;
       if (s.isBot && !PICKUP_BOT_ENABLED) continue;
+      // Sword bots are melee-only by design (own combat frame, own count/level settings — see
+      // _swordCombatFrame / isSwordBot throughout) and never switch weapons (driveBotFrame never
+      // presses a switch action for them either), so a gun pickup would just sit in their
+      // weaponList forever doing nothing. Skip them entirely rather than hand them dead weight.
+      if (s.isSwordBot) continue;
       const p = s.playerState;
       if (!p || !p.position || p._holdForPlay) continue;
       if (p.deathStateTimer > 0 || p.healthPoints <= 0) continue;
       const dist = Math.hypot(p.position.x - pt.x, (p.position.y + 1) - pt.y, p.position.z - pt.z);
       if (dist > PICKUP_RADIUS) continue;
-      _grantPickupWeapon(p, st.weaponTypeId);
+      _grantPickupWeapon(p, st.weaponTypeId, !!s.isBot);
       st.weaponTypeId = _randomPickupWeapon();   // pre-roll the NEXT weapon this point will offer
       st.availableAtTick = tick + PICKUP_RESPAWN_TICKS;
       break;   // point is now empty; no one else can take it this tick
@@ -10077,6 +10100,13 @@ function startServer() {
       x: sp.x, y: sp.y, z: sp.z,
       yaw: (sp.yaw * Math.PI) / 180,
     }, sessionId);
+    // createPlayerSimState unconditionally holds every NEW player state out of the match when
+    // CLICK_TO_PLAY is on (see its own "Held out of the match until they choose to play" comment)
+    // — correct for a real join (there's a menu + a click), meaningless for a bot (no UI, no RPC
+    // ever arrives to clear it). Left on, a bot spawned under this setting sat in spectator state
+    // forever: no spawn, no combat, nothing — reported live as "new bot can't join my lobby" the
+    // moment this was made the default. Bots always start in play, regardless of the setting.
+    playerState._holdForPlay = false;
 
     // A sword bot ALWAYS carries the sword and nothing else — opts.weaponId is ignored for it, the
     // same way SWORD_ONLY overrides everyone's loadout server-wide (this is just that override

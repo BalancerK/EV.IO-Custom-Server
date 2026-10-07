@@ -24,6 +24,9 @@ process.env.EVIO_ADMIN = '0';
 process.env.EVIO_LOCAL_HOST = '127.0.0.1';
 process.env.EVIO_LOCAL_PORT = process.env.EVIO_LOCAL_PORT || '18520';
 process.env.EVIO_JOIN_DEADLINE = '0';
+// A held real player ("Hold new players until they click to play", now the default) is not a
+// valid combat target, which would mask the bot-vs-player combat behavior this file tests.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const WebSocket = require('ws');
 const srv = require('../local_ws_server');

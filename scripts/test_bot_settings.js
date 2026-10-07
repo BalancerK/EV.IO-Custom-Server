@@ -10,6 +10,11 @@ process.env.EVIO_ADMIN = '0';
 process.env.EVIO_LOCAL_HOST = '127.0.0.1';
 process.env.EVIO_LOCAL_PORT = process.env.EVIO_LOCAL_PORT || '18510';
 process.env.EVIO_JOIN_DEADLINE = '0';
+// Real players here join via a real connection — a held player ("Hold new players until they
+// click to play", now the default) is correctly excluded from bot targeting/damage (a spectator
+// can't be shot), which would zero out this file's own bot-count/damage-multiplier assertions.
+// Not what this file tests (bot settings behavior once players ARE actually playing).
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');

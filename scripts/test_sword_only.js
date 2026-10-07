@@ -38,6 +38,15 @@ if (process.argv.includes('--both')) {
   process.exit(failed === 0 ? 0 : 1);
 }
 
+// This test builds playerStates directly via createPlayerSimState and inspects weaponSlots
+// straight from appendPlayerTickBody, with no "enter the match" step in between — "Hold new
+// players until they click to play" (now the default) holds a freshly-created playerState out of
+// the match until then, which appendPlayerTickBody's weaponSlots block correctly renders as NO
+// slots at all (a spectator has no weapon). That's real, correct behavior, just not what this
+// file exists to test (weaponSlots content for an actually-playing sword-only vs normal-mode
+// player) — disabled here so it keeps testing that.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
+
 const srv = require('../local_ws_server');
 const {
   SWORD_ONLY,

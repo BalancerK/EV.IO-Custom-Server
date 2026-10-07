@@ -28,6 +28,10 @@ process.env.EVIO_ADMIN = '0';
 process.env.EVIO_LOCAL_HOST = '127.0.0.1';
 process.env.EVIO_LOCAL_PORT = process.env.EVIO_LOCAL_PORT || '18530';
 process.env.EVIO_JOIN_DEADLINE = '0';
+// A held player ("Hold new players until they click to play", now the default) streams as a
+// spectator at a zeroed/held position, not their real one — this file's own peer-position-
+// smoothing assertions need the mover and watcher actually playing to mean anything.
+process.env.EVIO_CLICK_TO_PLAY = process.env.EVIO_CLICK_TO_PLAY || '0';
 
 const srv = require('../local_ws_server');
 const bpw = require('../physics_world');
