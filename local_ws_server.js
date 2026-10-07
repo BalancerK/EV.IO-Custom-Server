@@ -3697,8 +3697,10 @@ let HEADSHOT_MULT = S.define({
   desc: "Default head multiplier; per-weapon overrides still win.",
 }, (v) => { HEADSHOT_MULT = v; });
 // Per-weapon headshot multiplier overrides (most are 1.5; measured from an official capture).
-// nid 701 (Sweeper) = 1.33 (head 6.4 / body 4.8). Add others here as captures reveal them.
-const WEAPON_HEADSHOT_MULT = { 701: 1.33 };
+// nid 701 (Sweeper) = 1.33 (head 6.4 / body 4.8). nid 281 (Desert Eagle) = 1.55 (base dmg 65,
+// reported official headshot = 101 at 1x damage multiplier: 65*1.55=100.75, rounds to 101 — the
+// default 1.5 gives 97.5->98, visibly short). Add others here as captures reveal them.
+const WEAPON_HEADSHOT_MULT = { 701: 1.33, 281: 1.55 };
 let LOBBY_DAMAGE_MULT = S.define({
   key: "lobbyDamageMult", type: "number", def: 1.0, min: 0, max: 20, step: 0.1,
   category: "Gameplay", label: "Lobby damage multiplier",
@@ -4436,6 +4438,31 @@ function takeClientRay(shooter) {
   }
   return null;
 }
+// SR1 (the userscript's own shot-ray hook) sends ONE "#SHOT#" ray PER PELLET for a multi-pellet
+// weapon (count of them per trigger pull), but a shotgun shot only ever dequeues ONE via
+// takeClientRay() above — fireShotgunPellets recomputes the other pellet offsets itself
+// deterministically (see pelletDirections), it doesn't need the client's own per-pellet rays at
+// all. The other count-1 sibling rays would otherwise sit in the FIFO queue unconsumed: under
+// default cooldowns they age out (clientRayMaxAgeMs) before any later shot could reach them, but a
+// shortened fireCooldownScale or a fast weapon swap right after the shotgun could let a NEXT,
+// unrelated shot's takeClientRay() dequeue one of THESE leftover pellet rays instead of its own.
+// Sibling pellet rays share the same "shooterSid:fireTick" suffix (only the leading pelletIndex
+// differs — see enqueueClientRay's own comment on the sid format), so once we know the just-
+// consumed ray belongs to a multi-pellet shot, drop every other queued ray with that same suffix
+// right away — precise (a genuinely later shot has a different fireTick, so it's never touched)
+// and cheap (the queue is capped at 32 entries).
+function dropSiblingPelletRays(shooter, sid) {
+  const q = shooter._clientRays;
+  if (!Array.isArray(q) || !q.length || typeof sid !== "string") return;
+  const cut = sid.indexOf(":");
+  if (cut < 0) return;
+  const suffix = sid.slice(cut + 1);   // "shooterSid:fireTick"
+  for (let i = q.length - 1; i >= 0; i--) {
+    const s = q[i].sid;
+    const sc = typeof s === "string" ? s.indexOf(":") : -1;
+    if (sc >= 0 && s.slice(sc + 1) === suffix) q.splice(i, 1);
+  }
+}
 // Resolve the shot's eye + aim direction: prefer the client's exact ray (zero reconstruction
 // divergence), else fall back to the server's reconstruction.
 function shotRay(shooter, clientRay) {
@@ -4506,13 +4533,24 @@ function fireProjectileShot(shooter, sessions, clientRay) {
 // `fwd` plays the role of the camera's own forward axis; right/up are derived from it exactly like
 // any look-basis construction (world-up as the stabilizing reference, degenerate only when fwd is
 // itself near-vertical, negligible for a roughly-forward-facing shot).
+// lx/ly are the RAW (not pre-normalized) local cone offsets — this function builds the full local
+// vector (lx, ly, -1) (forward = local -Z, matching the real client's own `new Vector3(lx, ly,
+// -1).normalize()` before rotating it by the camera's yaw/pitch) and normalizes it as one 3D unit
+// vector before rotating, so the forward component gets the same 1/L scaling the lateral ones do.
+// A previous version had the caller pre-divide lx/ly by hypot(lx,ly,1) and used a bare coefficient
+// of 1 for fwd here — correct in the limit lx=ly=0, but at the shotgun's own spread radius (0.1)
+// that under-scaled forward relative to the exact per-component normalization by about 0.03°: real
+// enough to be worth fixing exactly (one caller, zero cost), negligible enough that it was never
+// going to be the difference between a landed and a missed pellet.
 function _coneOffsetToWorld(fwd, lx, ly) {
+  const l = Math.hypot(lx, ly, 1) || 1;
+  const nx = lx / l, ny = ly / l, nz = 1 / l;
   let rx = -fwd.z, ry = 0, rz = fwd.x;             // cross(worldUp(0,1,0), fwd)
   let rl = Math.hypot(rx, ry, rz);
   if (rl < 1e-6) { rx = 1; ry = 0; rz = 0; rl = 1; }   // fwd ~vertical: fall back to world +x as "right"
   rx /= rl; ry /= rl; rz /= rl;
   const ux = fwd.y * rz - fwd.z * ry, uy = fwd.z * rx - fwd.x * rz, uz = fwd.x * ry - fwd.y * rx;
-  const wx = rx * lx + ux * ly + fwd.x, wy = ry * lx + uy * ly + fwd.y, wz = rz * lx + uz * ly + fwd.z;
+  const wx = rx * nx + ux * ny + fwd.x * nz, wy = ry * nx + uy * ny + fwd.y * nz, wz = rz * nx + uz * ny + fwd.z * nz;
   const wl = Math.hypot(wx, wy, wz) || 1;
   return { x: wx / wl, y: wy / wl, z: wz / wl };
 }
@@ -4535,8 +4573,7 @@ function pelletDirections(nid, fwd, count, zooming) {
     for (let f = 0; f < p && dirs.length < count; f++) {
       const m = (f / p) * Math.PI * 2;
       const lx = Math.cos(m) * spread * scale, ly = Math.sin(m) * spread * scale;
-      const ll = Math.hypot(lx, ly, 1) || 1;
-      dirs.push(_coneOffsetToWorld(fwd, lx / ll, ly / ll));
+      dirs.push(_coneOffsetToWorld(fwd, lx, ly));
     }
   }
   return dirs;
@@ -4622,7 +4659,10 @@ function fireWeapon(shooter, sessions) {
   const nid = shooter.equippedWeaponId;
   if (WEAPON_MELEE[nid]) fireMelee(shooter, sessions, ray);
   else if (isProjectileWeapon(nid)) fireProjectileShot(shooter, sessions, ray);
-  else if (weaponPelletCount(nid) > 1) fireShotgunPellets(shooter, sessions, ray);
+  else if (weaponPelletCount(nid) > 1) {
+    fireShotgunPellets(shooter, sessions, ray);
+    if (ray && ray.sid) dropSiblingPelletRays(shooter, ray.sid);
+  }
   else fireHitscan(shooter, sessions, ray);
 }
 
@@ -10907,7 +10947,18 @@ function startServer() {
 }
 
 // Admin dashboard — on by default, loopback only (see admin_server.js). EVIO_ADMIN=0 disables it.
+// Node-only: admin_server.js itself requires http/other Node built-ins esbuild can't bundle for
+// the browser, so a bundled require("./admin_server") doesn't fail "module not found" — it throws
+// esbuild's own "Dynamic require ... is not supported" at the call site every time bootServer()
+// runs, which the try/catch below silently swallowed but still logged as a scary-looking error in
+// the extension's console. The extension has its own admin surface entirely (content.js's quick-
+// admin panel + admin.html, both hitting background.js's handleAdminRequest directly — no HTTP
+// server involved), so this Node-only dashboard has nothing to do there. Real Node always sets
+// process.version to a non-empty string; the extension's own process shim deliberately doesn't,
+// so this is a cheap, reliable way to skip the require entirely in the browser — a no-op guard
+// here under real Node, where process.version is always set.
 function _maybeStartAdmin() {
+  if (typeof process.version !== "string") return;
   if (process.env.EVIO_ADMIN === "0" || process.argv.includes("--no-admin")) return;
   try {
     require("./admin_server").startAdminServer(module.exports);
@@ -11021,20 +11072,29 @@ if (require.main === module) {
   // NODE_OPTIONS), which needs sudo beyond the 4 scoped systemctl verbs this deploy user has — the
   // observer needs only a normal code deploy through the existing pipeline, and gives structured,
   // timestamped, journald-visible pause durations directly comparable to the TICK OVERRUN log lines.
-  try {
-    const { PerformanceObserver, constants } = require("perf_hooks");
-    const KIND_NAMES = { 1: "scavenge", 2: "markSweepCompact", 4: "incrementalMarking", 8: "weakCB" };
-    const gcObserver = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        if (entry.duration >= 10) {
-          console.warn(`[evio-gc] kind=${KIND_NAMES[entry.kind] || entry.kind} `
-            + `duration=${entry.duration.toFixed(1)}ms at ${new Date().toISOString()}`);
+  // perf_hooks is a real Node built-in — esbuild can't bundle it for the browser target at all,
+  // so a bundled require("perf_hooks") doesn't throw a normal "module not found", it throws
+  // esbuild's own "Dynamic require ... is not supported" at the call site every time bootServer()
+  // runs, which the try/catch below silently swallowed but still logged as a scary-looking error
+  // in the extension's console. Real Node always sets process.version to a non-empty string; the
+  // extension's own process shim deliberately doesn't, so this is a cheap, reliable way to skip
+  // the require entirely in the browser — a no-op guard here under real Node.
+  if (typeof process.version === "string") {
+    try {
+      const { PerformanceObserver, constants } = require("perf_hooks");
+      const KIND_NAMES = { 1: "scavenge", 2: "markSweepCompact", 4: "incrementalMarking", 8: "weakCB" };
+      const gcObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration >= 10) {
+            console.warn(`[evio-gc] kind=${KIND_NAMES[entry.kind] || entry.kind} `
+              + `duration=${entry.duration.toFixed(1)}ms at ${new Date().toISOString()}`);
+          }
         }
-      }
-    });
-    gcObserver.observe({ entryTypes: ["gc"] });
-  } catch (err) {
-    console.error(`[evio-local] GC observer failed to start (diagnostic only, non-fatal): ${err.message}`);
+      });
+      gcObserver.observe({ entryTypes: ["gc"] });
+    } catch (err) {
+      console.error(`[evio-local] GC observer failed to start (diagnostic only, non-fatal): ${err.message}`);
+    }
   }
 
   bpw.ready
