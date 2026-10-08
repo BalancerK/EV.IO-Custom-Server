@@ -10,6 +10,11 @@ This is a research/hobby project, not an official ev.io product and not affiliat
 its operator. It is meant for private, local, or self-hosted play with people you know — see
 [Scope and disclaimer](#scope-and-disclaimer).
 
+**New to this codebase?** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how everything
+fits together from scratch — no prior knowledge of networked games or this project assumed — and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers how to find a bug, write a test for it, and submit a
+change.
+
 ## What's actually in here
 
 - **A full server-authoritative simulation** (`physics_extracted.js` + `physics_world.js`):
@@ -198,9 +203,10 @@ must be explicitly pointed at.
 
 ## Contributing
 
-Issues and PRs are welcome. The test suite (`npm test`) is the bar for any change that touches
-simulation or netcode — most of it exists because a real bug shipped once and got a regression
-test to match.
+Issues and PRs are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to get oriented,
+diagnose a client/server mismatch, write a test for it, and submit a change. The test suite
+(`npm test`) is the bar for any change that touches simulation or netcode — most of it exists
+because a real bug shipped once and got a regression test to match.
 
 ## License
 
