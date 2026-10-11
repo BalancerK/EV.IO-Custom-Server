@@ -100,8 +100,6 @@
 
     PAGE.__EVIO_CUSTOM__ = readCustomConfig();
 
-    PAGE.__EVIO_HB2__ = false;
-
     PAGE.__EVIO_PRESERVE_RECON__ = function (oldState, newState) {
         try {
             var cfg = PAGE.__EVIO_CUSTOM__;
@@ -131,83 +129,6 @@
             if (sid != null && sid !== '') msg += ',' + sid;
             sock.send(msg);
         } catch (e) { }
-    };
-
-    PAGE.__EVIO_CUSTOM__.snapWatchdog = {
-        enabled: true,
-        thresholdUnits: 6,
-        minTicks: 5,
-        cooldownMs: 500,
-        snaps: 0,
-        nanRecoveries: 0,
-        streak: 0, lastSnapAt: 0, lastDist: 0, maxDist: 0,
-        log: true,
-    };
-    PAGE.__EVIO_CUSTOM__.snapStats = function () {
-        var W = this.snapWatchdog;
-        _con.log('[evio-snapwd] snaps=' + W.snaps + ' nanRecoveries=' + W.nanRecoveries
-            + ' lastDist=' + W.lastDist.toFixed(2) + 'u maxDist=' + W.maxDist.toFixed(2)
-            + 'u threshold=' + W.thresholdUnits + 'u enabled=' + W.enabled);
-        return W;
-    };
-
-    PAGE.__EVIO_SNAPWD__ = function (recon, serverState) {
-        var W = PAGE.__EVIO_CUSTOM__ && PAGE.__EVIO_CUSTOM__.snapWatchdog;
-        if (!W || !W.enabled || !PAGE.__EVIO_CUSTOM__.enabled) return;
-
-        var sid = recon.Qa1zep6;
-        var pd  = serverState && serverState.Qaol467;
-        var se  = pd && pd.Qa7phk3 && pd.Qa7phk3[sid];
-        var cur = recon.Qobex5y && recon.Qobex5y.Qcvr9bt;
-        var ce  = cur && cur.Qh33ug3;
-        if (!se || !ce || !se.Qdsukt4 || !ce.Qdsukt4) return;
-
-        if (se.Qyxhj60 !== 1) { W.streak = 0; return; }
-
-        var fin3 = function (v) { return !!v && isFinite(v.x) && isFinite(v.y) && isFinite(v.z); };
-        var now = performance.now(), dist = 0;
-
-        if (!fin3(ce.Qdsukt4) || (ce.Qyaswvo && !fin3(ce.Qyaswvo))) {
-            if (!fin3(se.Qdsukt4)) return;
-            W.nanRecoveries++;
-            W.streak = W.minTicks;
-            W.lastSnapAt = 0;
-            if (W.log) _con.log('%c[evio-snapwd] NaN in prediction — forcing recovery snap',
-                'background:#b71c1c;color:#fff;padding:2px 6px;border-radius:3px');
-        } else {
-            var dx = se.Qdsukt4.x - ce.Qdsukt4.x,
-                dy = se.Qdsukt4.y - ce.Qdsukt4.y,
-                dz = se.Qdsukt4.z - ce.Qdsukt4.z;
-            dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            W.lastDist = dist;
-            if (dist > W.maxDist) W.maxDist = dist;
-            if (dist < W.thresholdUnits) { W.streak = 0; return; }
-            if (++W.streak < W.minTicks) return;
-            if (now - W.lastSnapAt < W.cooldownMs) return;
-        }
-        if (!fin3(se.Qdsukt4)) return;
-
-        var apply = function (entity) {
-            if (!entity || !entity.Qdsukt4) return;
-            entity.Qdsukt4.x = se.Qdsukt4.x;
-            entity.Qdsukt4.y = se.Qdsukt4.y;
-            entity.Qdsukt4.z = se.Qdsukt4.z;
-            if (entity.Qyaswvo) {
-                var sv = fin3(se.Qyaswvo) ? se.Qyaswvo : { x: 0, y: 0, z: 0 };
-                entity.Qyaswvo.x = sv.x; entity.Qyaswvo.y = sv.y; entity.Qyaswvo.z = sv.z;
-            }
-            entity.Q9t2fit = se.Q9t2fit;
-            entity.Qac6dfa = se.Qac6dfa;
-            entity.Q2r3ysn = se.Q2r3ysn;
-        };
-
-        apply(ce);
-        if (recon.Qobex5z && recon.Qobex5z.Qcvr9bt) apply(recon.Qobex5z.Qcvr9bt.Qh33ug3);
-
-        W.snaps++; W.streak = 0; W.lastSnapAt = now;
-        if (W.log) _con.log('%c[evio-snapwd] SNAP #' + W.snaps + ' — ' + dist.toFixed(2)
-            + 'u gap held for ' + W.minTicks + ' packets; position+velocity reset to server',
-            'background:#b71c1c;color:#fff;padding:2px 6px;border-radius:3px');
     };
 
     (function installIdentityCapture() {
@@ -1019,11 +940,6 @@
         var patches = [
 
             {
-                name: '6a  undefined player crash guard',
-                from: 'var Q=n.Qa7phk3[p.Qxluan],f=hb.Qhkjwni.Qqg43ev().dataById[Q.Qslw9vf];',
-                to:   'var Q=n.Qa7phk3[p.Qxluan];if(void 0===Q)continue;var f=hb.Qhkjwni.Qqg43ev().dataById[Q.Qslw9vf];',
-            },
-            {
 
                 name: '6b7 custom-mode: skip pitch + pitchOffset (production comparator; see 6b9)',
                 from: 'Math.abs(e.Qcrzrpr-t.Qcrzrpr)>1e-4||Math.abs(e.Qd0yy90-t.Qd0yy90)>1e-4||',
@@ -1046,69 +962,9 @@
                 to:   "(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)||a.includes('/examine')||a.includes('/dance'))lb.Ql1g6nk.Qam4u9w.Qm0eht4({msg:a})",
             },
             {
-                name: 'SW1 desync watchdog: snap position+velocity on large sustained gap',
-                from: 'this.Qy431ao=t,this.Qorty0h.push({sync:e.sync,clientTick:e.clientTick,body:t})',
-                to:   'this.Qy431ao=t,this.Qorty0h.push({sync:e.sync,clientTick:e.clientTick,body:t});try{window.__EVIO_SNAPWD__&&window.__EVIO_SNAPWD__(this,t);}catch(_){}',
-            },
-            {
-                name: 'CS1 expose latest confirmed server state (custom mode)',
-                from: 'this.Qy431ao=t,this.Qorty0h.push({sync:e.sync,clientTick:e.clientTick,body:t})',
-                to:   'this.Qy431ao=t,(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled&&(window.__EVIO_CONFIRMED__=t)),this.Qorty0h.push({sync:e.sync,clientTick:e.clientTick,body:t})',
-            },
-            {
                 name: 'SR1 forward exact shot ray + sessionId to custom server',
                 from: "u.push({Q7q6byi:f+':'+p+':'+a,Q616y7o:0,Qxluan:p,Qtql1ud:l.clone(),Qsjaj00:v,",
                 to:   "(window.__EVIO_SHOTRAY__&&window.__EVIO_SHOTRAY__(l,v,f+':'+p+':'+a)),u.push({Q7q6byi:f+':'+p+':'+a,Q616y7o:0,Qxluan:p,Qtql1ud:l.clone(),Qsjaj00:v,",
-            },
-            {
-
-                name: 'HB3 health-bar: guard the position lerp against a missing previous frame',
-                from: 'n.copy(h.Qdsukt4).lerp(c.Qdsukt4,e.Qzh2kcz)',
-                to:   'n.copy((h||c).Qdsukt4).lerp(c.Qdsukt4,e.Qzh2kcz)',
-            },
-            {
-                name: 'HB2 health-bar: current HP from confirmed state (OFF by default, see __EVIO_HB2__)',
-                from: 'var m=c.Qq7zdfv>h.Qq7zdfv?h.Qq7zdfv+(c.Qq7zdfv-h.Qq7zdfv)*e.Qzh2kcz:c.Qq7zdfv,g=c.Qd032mo>h.Qd032mo?h.Qd032mo+(c.Qd032mo-h.Qd032mo)*e.Qzh2kcz:c.Qd032mo,',
-
-                to:   'var QhG=h||c,Qcc=(window.__EVIO_HB2__!==false&&window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled&&window.__EVIO_CONFIRMED__&&window.__EVIO_CONFIRMED__.Qaol467&&window.__EVIO_CONFIRMED__.Qaol467.Qa7phk3&&window.__EVIO_CONFIRMED__.Qaol467.Qa7phk3[r])||c,m=Qcc.Qq7zdfv>QhG.Qq7zdfv?QhG.Qq7zdfv+(Qcc.Qq7zdfv-QhG.Qq7zdfv)*e.Qzh2kcz:Qcc.Qq7zdfv,g=Qcc.Qd032mo>QhG.Qd032mo?QhG.Qd032mo+(Qcc.Qd032mo-QhG.Qd032mo)*e.Qzh2kcz:Qcc.Qd032mo,',
-            },
-            {
-                // Qgx464 ("Ticks ahead", confirmed against the real bundle's own debug label) and
-                // Q1o1c43 ("sync") are both DIRECT measures of the player's real round-trip
-                // latency in ticks — Qgx464 specifically comes from
-                // `e.body.Qwhlcfo - Qxo2o14[t].Qjdbmai.Qwhlcfo`, literally "how many ticks has the
-                // server advanced since I sent the input this echo answers" (bundle :27376). These
-                // four patches (6d3/6d4/K1/K2) were all unconditional — applied even on OFFICIAL
-                // play — and all clamp that measurement to 3 ticks (150ms). For anyone with real
-                // RTT under 150ms this is a no-op; for anyone over it (confirmed live: a
-                // 200-300ms SEA player saw ~25% of their own shots on the OFFICIAL server not
-                // register), the client's own tick-ahead bookkeeping gets clamped below what
-                // their real connection needs, which is a straightforwardly wrong thing to do to
-                // a stock, unmodified official-server connection this userscript had no business
-                // touching at all. Gated to custom mode only now, same convention every other
-                // patch here that changes gameplay-affecting behavior already follows — if this
-                // clamp is genuinely needed against OUR OWN server's own reconciliation quirks,
-                // that's where it stays relevant; it was never official play's problem to begin
-                // with.
-                name: '6d3 custom-mode: clamp incoming Q1o1c43 to ±3',
-                from: 'this.Qjdbmai=o.body,this.Q1o1c43=o.sync;',
-                to:   'this.Qjdbmai=o.body,this.Q1o1c43=(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)?Math.max(-3,Math.min(3,o.sync)):o.sync;',
-            },
-            {
-                name: '6d4 custom-mode: clamp Q1o1c43 in loading path',
-                from: 'this.Q1o1c43=this.Qorty0h.length-1,this.Qobex5z',
-                to:   'this.Q1o1c43=(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)?Math.min(this.Qorty0h.length-1,3):this.Qorty0h.length-1,this.Qobex5z',
-            },
-
-            {
-                name: 'K1  custom-mode: cap Qgx464 from server RTT delta to 3 ticks (150ms max)',
-                from: 's>=0&&(this.Qgx464=s)',
-                to:   's>=0&&(this.Qgx464=(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)?Math.min(s,3):s)',
-            },
-            {
-                name: 'K2  custom-mode: cap Qgx464 no-state-increment to 3 ticks (150ms max)',
-                from: 'this.Qjdbmah=this.Qjdbmai,this.Qgx464++,this.Qjtawf1',
-                to:   'this.Qjdbmah=this.Qjdbmai,this.Qgx464=(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)?Math.min(this.Qgx464+1,3):this.Qgx464+1,this.Qjtawf1',
             },
         ];
 
