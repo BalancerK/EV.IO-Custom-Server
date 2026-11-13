@@ -63,9 +63,9 @@ function medalsOnWire() {
 console.log('\n── the key map matches the bundle table ──');
 {
   const expect = {
-    kill: 'Qwhr33n', headshot: 'Qh04ltj', sword: 'Qcq3jgy', sticky: 'Qvnv1p4',
-    frag: 'Qwhu3mn', mine: 'Qwhpt32', tripmine: 'Qqfl31j', longshot: 'Qwuvmcb',
-    assist: 'Qn4okig',
+    kill: 'kill', headshot: 'headshot', sword: 'sword', sticky: 'sticky',
+    frag: 'frag', mine: 'mine', tripmine: 'tripmine', longshot: 'longshot',
+    assist: 'assist',
   };
   for (const k of Object.keys(expect)) {
     ok(`${k} -> ${expect[k]}`, srv.MEDAL_KEY[k] === expect[k], String(srv.MEDAL_KEY[k]));
@@ -81,9 +81,9 @@ console.log('\n── a kill emits one medal per award, not one lump ──');
   srv.applyDamage(V, 2.0, B, { headshot: true, weaponMedal: 'sword' });
   const m = medalsOnWire();
   ok('three separate medals', m.length === 3, String(m.length));
-  ok('+1 Kill (100)', m.some((x) => x.medal === 'Qwhr33n' && x.points === 100));
-  ok('Headshot (10)', m.some((x) => x.medal === 'Qh04ltj' && x.points === 10));
-  ok('Sword Kill (20)', m.some((x) => x.medal === 'Qcq3jgy' && x.points === 20));
+  ok('+1 Kill (100)', m.some((x) => x.medal === 'kill' && x.points === 100));
+  ok('Headshot (10)', m.some((x) => x.medal === 'headshot' && x.points === 10));
+  ok('Sword Kill (20)', m.some((x) => x.medal === 'sword' && x.points === 20));
   ok('all credited to the killer', m.every((x) => x.recipient === 'B'));
   ok('and the score is their sum', B.score === 130, String(B.score));
 }
@@ -103,10 +103,10 @@ console.log('\n── a guest is worth the same as a signed-in player ──');
   srv.applyDamage(G, 2.0, B, { headshot: true, victimUid: 17 });   // 17 = GUEST_UID
   const guestKill = medalsOnWire();
   ok('killing a guest pays the full kill medal',
-    guestKill.some((x) => x.medal === 'Qwhr33n' && x.points === 100),
+    guestKill.some((x) => x.medal === 'kill' && x.points === 100),
     JSON.stringify(guestKill.map((x) => `${x.medal}:${x.points}`)));
   ok('and the full headshot bonus',
-    guestKill.some((x) => x.medal === 'Qh04ltj' && x.points === 10),
+    guestKill.some((x) => x.medal === 'headshot' && x.points === 10),
     'a 0.3x headshot rounds to 3, which is what players noticed');
   ok('the score matches a normal kill', B.score === 110, String(B.score));
 
@@ -130,10 +130,10 @@ console.log('\n── ...but the official penalty is still available ──');
   srv.applyDamage(G, 2.0, B, { headshot: true, victimUid: 17 });
   const m = medalsOnWire();
   ok('0.3 restores the official kill value',
-    m.some((x) => x.medal === 'Qwhr33n' && x.points === 30),
+    m.some((x) => x.medal === 'kill' && x.points === 30),
     JSON.stringify(m.map((x) => `${x.medal}:${x.points}`)));
   ok('rounding matches the client (10 * 0.3 -> 3)',
-    m.some((x) => x.medal === 'Qh04ltj' && x.points === 3),
+    m.some((x) => x.medal === 'headshot' && x.points === 3),
     'Qmblb53 rounds after each multiply');
   S.set('guestScoreMultiplier', prev, 'test');
 }
@@ -149,7 +149,7 @@ console.log('\n── a bot is still not worth a person ──');
   Bot.isBot = true;
   srv.applyDamage(Bot, 2.0, B, { victimUid: 1234 });
   const m = medalsOnWire();
-  ok('killing a bot still pays 30', m.some((x) => x.medal === 'Qwhr33n' && x.points === 30),
+  ok('killing a bot still pays 30', m.some((x) => x.medal === 'kill' && x.points === 30),
     JSON.stringify(m.map((x) => `${x.medal}:${x.points}`)));
 }
 
@@ -160,7 +160,7 @@ console.log('\n── an assist announces itself too ──');
   srv.applyDamage(V, 0.3, A, {});
   srv.applyDamage(V, 2.0, B, {});
   const m = medalsOnWire();
-  const assist = m.find((x) => x.medal === 'Qn4okig');
+  const assist = m.find((x) => x.medal === 'assist');
   ok('the assist medal is emitted', !!assist);
   ok('to the assister, not the killer', assist && assist.recipient === 'A', assist && assist.recipient);
   ok('worth 10', assist && assist.points === 10, assist && String(assist.points));
@@ -178,7 +178,7 @@ console.log('\n── wire shape ──');
   ok('69 carries the entry id', m && m.id === m.key);
   ok('70 is 0', m && m.zero === 0);
   ok('71/72/73 are recipient/medal/points',
-    m && m.recipient === 'B' && m.medal === 'Qwhr33n' && m.points === 100);
+    m && m.recipient === 'B' && m.medal === 'kill' && m.points === 100);
   // The recipient must equal the id the client keys players by — the 244 block's key. Sending
   // anything else (playerState has no `.id`) leaves the medal unmatched and silently unrendered.
   const pb = [];
@@ -220,33 +220,33 @@ console.log('\n── conditional medals ──');
   // Longshot: Qkkc81w.Qwuvmcb.Qyz05ae = 65 units.
   reset(); const A = mk('A'), V = mk('V');
   kill(A, V, { dist: 80 });
-  ok('longshot past 65 units', medals().includes('Qwuvmcb'), medals().join(','));
+  ok('longshot past 65 units', medals().includes('longshot'), medals().join(','));
   reset(); kill(A, V, { dist: 64 });
-  ok('but not at 64', !medals().includes('Qwuvmcb'));
+  ok('but not at 64', !medals().includes('longshot'));
 
   // Kill From The Grave: the killer was already dead.
   reset(); const G = mk('G'), V2 = mk('V2'); G.healthPoints = 0;
   kill(G, V2, {});
-  ok('kill from the grave when the killer is dead', medals().includes('Qcwsjt6'));
+  ok('kill from the grave when the killer is dead', medals().includes('grave'));
   reset(); const H = mk('H'); kill(H, V2, {});
-  ok('not awarded when alive', !medals().includes('Qcwsjt6'));
+  ok('not awarded when alive', !medals().includes('grave'));
 
   // Noscope: scoped weapon, fired unscoped, not melee.
   reset(); const N = mk('N'), V3 = mk('V3');
   kill(N, V3, { noDefaultCrosshair: true, melee: false, zooming: false });
-  ok('noscope with a scoped weapon fired hip', medals().includes('Ql8t342'));
+  ok('noscope with a scoped weapon fired hip', medals().includes('noScopeKill'));
   reset(); kill(N, V3, { noDefaultCrosshair: true, melee: false, zooming: true });
-  ok('not while aiming down sights', !medals().includes('Ql8t342'));
+  ok('not while aiming down sights', !medals().includes('noScopeKill'));
   reset(); kill(N, V3, { noDefaultCrosshair: true, melee: true, zooming: false });
   ok('and melee is excluded (the sword also sets noDefaultCrosshair)',
-    !medals().includes('Ql8t342'));
+    !medals().includes('noScopeKill'));
 
   // Usurper: victim led on kills, and it takes more than 2 players.
   reset(); const U = mk('U'), L = mk('L');
   kill(U, L, { victimWasLeader: true, playerCount: 4 });
-  ok('usurper for killing the leader', medals().includes('Qc74s4x'));
+  ok('usurper for killing the leader', medals().includes('kill1stRank'));
   reset(); kill(U, L, { victimWasLeader: true, playerCount: 2 });
-  ok('not in a duel', !medals().includes('Qc74s4x'));
+  ok('not in a duel', !medals().includes('kill1stRank'));
 }
 
 console.log('\n── multikill chains ──');
@@ -256,17 +256,17 @@ console.log('\n── multikill chains ──');
   const seen = [];
   for (let i = 0; i < 4; i++) { C.ticksSinceKill = 10; kill(C, X, {}); }
   const got = medalsOnWire().map((m) => m.medal);
-  ok('double at 2', got.includes('Qlnn3me'));
-  ok('multi at 3', got.includes('Qlnn3md'));
-  ok('ultra at 4', got.includes('Qlnn3mc'));
-  ok('monster at 5', got.includes('Qlnn3mb'));
+  ok('double at 2', got.includes('multikill2'));
+  ok('multi at 3', got.includes('multikill3'));
+  ok('ultra at 4', got.includes('multikill4'));
+  ok('monster at 5', got.includes('multikill5'));
 
   // A slow kill restarts the chain.
   reset(); const D = mk('D'), Y = mk('Y');
   D.ticksSinceKill = 10; kill(D, Y, {});
   D.ticksSinceKill = 99999; kill(D, Y, {});
   ok('a gap longer than the window resets the chain',
-    !medalsOnWire().map((m) => m.medal).includes('Qlnn3md'), 'should not reach Multi Kill');
+    !medalsOnWire().map((m) => m.medal).includes('multikill3'), 'should not reach Multi Kill');
 }
 
 console.log('\n── killstreaks ──');
@@ -274,7 +274,7 @@ console.log('\n── killstreaks ──');
   const kill = (A, V) => { V.healthPoints = 1; V.deathStateTimer = 0; srv.applyDamage(V, 2.0, A, {}); };
   reset(); const E = mk('E'), Z = mk('Z');
   for (let i = 0; i < 5; i++) { E.ticksSinceKill = 99999; kill(E, Z); }
-  ok('killing spree at 5', medalsOnWire().map((m) => m.medal).includes('Qvltnhr'));
+  ok('killing spree at 5', medalsOnWire().map((m) => m.medal).includes('spree5'));
   ok('the streak is tracked', E.killStreak === 5, String(E.killStreak));
 
   // Dying breaks it.
