@@ -76,8 +76,11 @@ function splitPickupBlocks(block) {
       S.get('survivalWaveTicks') === 500, String(S.get('survivalWaveTicks')));
     ok('survivalStartDelayTicks matches official survival\'s own 2.5s delay (Qkd51bb)',
       S.get('survivalStartDelayTicks') === 50, String(S.get('survivalStartDelayTicks')));
-    ok('survivalBossDamageResist defaults to a real resistance (<1)', S.get('survivalBossDamageResist') < 1,
-      String(S.get('survivalBossDamageResist')));
+    ok('boss cadence is the official every-10-waves', S.get('survivalBossEveryNWaves') === 10);
+    ok('one boss at a time by default (official)', S.get('survivalMaxSimultaneousBosses') === 1);
+    ok('bots respawn after the official 20s', S.get('survivalBotRespawnTicks') === 400);
+    ok('pool starts at the official 8 and tops out at 20',
+      S.get('survivalBaseBotCount') === 8 && S.get('survivalMaxBotCount') === 20);
   }
 
   console.log('\n── protocol: opcode 298 (round start tick) and 237/239/240 (isBot/isBoss/isZombie) ──');
@@ -115,6 +118,84 @@ function splitPickupBlocks(block) {
   }
 
 
+
+  console.log('\n── official numbers: bot level, zombie / gunman / boss stats ──');
+  {
+    ok('bot level is 2 on wave 1', srv.survivalBotLevelForWave(1) === 2);
+    ok('bot level reaches the official cap of 6 and stays there',
+      srv.survivalBotLevelForWave(50) === 6 && srv.survivalBotLevelForWave(500) === 6);
+    const z1 = srv.survivalBotStatsForWave(1, { zombie: true });
+    const z20 = srv.survivalBotStatsForWave(20, { zombie: true });
+    const g1 = srv.survivalBotStatsForWave(1, {}), g20 = srv.survivalBotStatsForWave(20, {});
+    ok('a wave-1 zombie is slow (0.6) and hits for at most 0.45 of a health bar',
+      Math.abs(z1.speed - 0.6) < 1e-9 && z1.dmgCap === 0.45, JSON.stringify(z1));
+    ok('zombie speed is capped at 1.1 and health at x2', z20.speed === 1.1 && z20.hpMult <= 2, JSON.stringify(z20));
+    ok('gunmen do not scale with the wave at all (official bonuses are 0)',
+      g1.speed === g20.speed && g1.hpMult === g20.hpMult && g1.dmgMult === g20.dmgMult && g1.dmgCap === 0.15);
+    const b10 = srv.survivalBotStatsForWave(10, { boss: true });
+    ok('a wave-10 boss has 30x health (10 x (1 + 0.2 x 10))', Math.abs(b10.hpMult - 30) < 1e-9, String(b10.hpMult));
+    ok('boss speed never passes the official 1.5 cap', srv.survivalBotStatsForWave(500, { boss: true }).speed === 1.5);
+  }
+
+  console.log('\n── official numbers: per-bot damage and health go through applyDamage ──');
+  {
+    S.set('gameMode', 'survival', 'test');
+    const victim = mkPlayerState('dmg-v'), zombie = mkPlayerState('dmg-z');
+    zombie._survDmgMult = 0.5; zombie._survDmgCap = 0.45;
+    srv.applyDamage(victim, 5, zombie, { attackerIsBot: true, victimIsBot: false });
+    ok('a huge zombie hit is clamped to 0.45 of a health bar', Math.abs((1 - victim.healthPoints) - 0.45) < 1e-6,
+      String(victim.healthPoints));
+    const boss = mkPlayerState('dmg-b'), player = mkPlayerState('dmg-p');
+    boss._survHpMult = 30; boss._survIsBoss = true;
+    srv.applyDamage(boss, 0.3, player, { attackerIsBot: false, victimIsBot: true });
+    ok('a boss with 30x health loses 1/30 of the damage dealt', Math.abs((1 - boss.healthPoints) - 0.01) < 1e-6,
+      String(boss.healthPoints));
+  }
+
+  console.log('\n── weapon tiers: pickups upgrade the weapon, damage follows, death resets ──');
+  {
+    S.set('gameMode', 'survival', 'test');
+    const p = mkPlayerState('tier-p');
+    p.weaponList = [4, 262]; p.equippedWeaponId = 4;
+    const sent = [];
+    const sess = { ws: { readyState: 1, OPEN: 1, send(m) { sent.push(String(m)); } } };
+    srv._grantPickupWeapon(p, 6, false, 2, sess);
+    ok('a fresh tier-2 pickup is carried at tier 2', srv.survivalWeaponTier(p, 6) === 2);
+    const ammoOne = p.pickupAmmo[6];
+    srv._grantPickupWeapon(p, 6, false, 1, sess);
+    ok('picking the same weapon up again ADDS its tier (2 + 1 = 3)', srv.survivalWeaponTier(p, 6) === 3);
+    ok('and the HUD is told the weapon was upgraded', sent.some((m) => m.startsWith('~4`') && m.includes('"tier":3')),
+      JSON.stringify(sent));
+    srv._grantPickupWeapon(p, 6, false, 4, sess);
+    ok('tier is capped at the official maximum of 4', srv.survivalWeaponTier(p, 6) === 4);
+    const body = srv.buildTickBody('tier-p', 77001, p, new Map());
+    let tierOnWire;
+    for (let i = 0; i < body.length - 7; i++) if (body[i] === 135 && body[i + 1] === 6) { tierOnWire = body[i + 7]; break; }
+    ok('opcode 134 streams the weapon\'s real tier', tierOnWire === 4, String(tierOnWire));
+    S.set('gameMode', 'deathmatch', 'test');
+    const d = mkPlayerState('tier-d'); d.weaponList = [4, 262];
+    srv._grantPickupWeapon(d, 6, false, 3, null);
+    ok('survival pickups give twice the ammo a deathmatch pickup does', ammoOne === 2 * d.pickupAmmo[6],
+      ammoOne + ' vs ' + d.pickupAmmo[6]);
+    ok('deathmatch has no weapon tiers', srv.survivalWeaponTier(d, 6) === 1);
+    S.set('gameMode', 'survival', 'test');
+  }
+
+  console.log('\n── scoring: wave multiplier and the x20 boss kill ──');
+  {
+    S.set('gameMode', 'survival', 'test');
+    const st = srv.getSurvivalState();
+    const keep = st.currentWave;
+    const bot = { isBot: true }, bossV = { isBot: true, _survIsBoss: true };
+    st.currentWave = 0; const w0 = srv.medalScore('kill', bot, -1);
+    st.currentWave = 10; const w10 = srv.medalScore('kill', bot, -1);
+    st.currentWave = 500; const w500 = srv.medalScore('kill', bot, -1);
+    ok('score doubles by wave 10 and tops out at triple', w10 === 2 * w0 && w500 === 3 * w0, [w0, w10, w500].join(','));
+    st.currentWave = 0;
+    ok('a boss kill is worth 20x a bot kill', srv.medalScore('kill', bossV, -1) === 20 * w0);
+    st.currentWave = keep;
+  }
+
   console.log('\n── wave escalation: bot count/level climb, a boss appears on schedule ──');
   {
     S.set('botDamageMult', 1, 'test');   // reset first so the next line's effect is unambiguous
@@ -127,7 +208,6 @@ function splitPickupBlocks(block) {
     S.set('survivalBaseBotCount', 2, 'test');
     S.set('survivalBotCountPerWave', 1, 'test');
     S.set('survivalMaxBotCount', 10, 'test');
-    S.set('survivalLevelUpEveryNWaves', 2, 'test');
     S.set('survivalBossEveryNWaves', 3, 'test');
     S.set('survivalSpecialWaveChance', 0, 'test');   // deterministic for this section
 
@@ -157,10 +237,10 @@ function splitPickupBlocks(block) {
     // directly rather than sleep through it).
     srv.match.roundStartTick = srv.getStatus().globalTick - 3 * 100;
     srv.tickSurvivalWaves(sessions);
-    // targetCount = base + (wave-1)*perWave = 2 + 2*1 = 4; targetLevel = 5 + floor((wave-1)/2) = 6.
+    // targetCount = base + (wave-1)*perWave = 2 + 2*1 = 4; level follows the official 2 + 0.08/wave curve.
     ok('wave 3 escalates the bot count (2 base + (3-1))', survivalBots().length === 4,
       String(survivalBots().length));
-    ok('wave 3 escalates bot level (5 base + floor((3-1)/2))', survivalBots().every((bt) => bt.botLevel === 6),
+    ok('wave 3 bots are at the official level for that wave', survivalBots().every((bt) => bt.botLevel === srv.survivalBotLevelForWave(3)),
       JSON.stringify(survivalBots().map((bt) => bt.botLevel)));
     ok('survival bots get no flavor names (hidden from scoreboard anyway)',
       survivalBots().every((bt) => bt.displayName === 'Bot'),
@@ -241,8 +321,8 @@ function splitPickupBlocks(block) {
 
     S.set('survivalMultiBossEveryNWaves', 20, 'test');
     S.set('survivalMaxSimultaneousBosses', 4, 'test');
-    S.set('survivalSpecialWaveChance', 0.3, 'test');
-    S.set('survivalSpecialWaveChanceRampPerWave', 0.01, 'test');
+    S.set('survivalSpecialWaveChance', 0.2, 'test');
+    S.set('survivalSpecialWaveChanceRampPerWave', 0, 'test');
     S.set('survivalSpecialWaveChanceMax', 0.75, 'test');
   }
 
@@ -417,6 +497,7 @@ function splitPickupBlocks(block) {
     S.set('survivalBotCountPerWave', 0, 'test');
     S.set('survivalBossEveryNWaves', 1000, 'test');   // keep the boss out of this test entirely
     S.set('survivalSpecialWaveChance', 1, 'test');    // force one every eligible wave
+    S.set('survivalSpecialWaveChanceMax', 1, 'test'); // the ceiling applies even to a forced 1 — this used to make the test pass only 75% of the time
     S.set('survivalMeleeBotRatio', 0, 'test');        // keep this test's "default=4" assumption simple
 
     const real = mkRealSession('sw-real');
@@ -528,7 +609,7 @@ function splitPickupBlocks(block) {
         srv.getPickupState()[0].availableAtTick > 0);
     }
 
-    S.set('survivalItemChance', 0.25, 'test');
+    S.set('survivalItemChance', 0.5, 'test');
     sessions.delete(a.sessionId);
     srv._resetPickupState();
   }
@@ -736,6 +817,8 @@ function splitPickupBlocks(block) {
     const attacker = mkPlayerState('boss-attacker');
     const plainBot = mkPlayerState('boss-plain');
     const bossBot = mkPlayerState('boss-victim');
+    // The boss's bigger pool is stamped on its state by applySurvivalBotStats (official wave-10 value).
+    bossBot._survHpMult = srv.survivalBotStatsForWave(10, { boss: true }).hpMult; bossBot._survIsBoss = true;
     srv.applyDamage(plainBot, 0.3, attacker, { attackerIsBot: false, victimIsBot: true, victimIsBoss: false });
     srv.applyDamage(bossBot, 0.3, attacker, { attackerIsBot: false, victimIsBot: true, victimIsBoss: true });
     ok('both are still normalized 0..1 health, not an inflated pool',
