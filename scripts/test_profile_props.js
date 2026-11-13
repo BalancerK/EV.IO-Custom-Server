@@ -3,24 +3,27 @@
  *
  * The scoreboard/kill-feed avatar and the clan insignia must reach the client.
  *
- * HOW THE CLIENT BUILDS THEM
+ * HOW THE CLIENT BUILDS THEM (ev.io 1-7-1 — the old obfuscated getPlayerProps/PlayerPropKey
+ * system this test used to check is gone from the bundle entirely, replaced by a now fully
+ * readable "AdditionalUserInfo" system; see buildPropRoster's own comment in local_ws_server.js
+ * for the full before/after mapping)
  * ──────────────────────────
- * Avatar — scoreboard and kill feed use the SAME helper, so one prop fixes both:
- *   K = function(entity, props, cfg) { var i = props.Qaalbed; ...zombie override...; return i }
- *   scoreboard: '<div class="msg_profile_score ' + props.Qy58vo2.toLowerCase() + '"><img src="' + K(..) + '">'
- *   kill feed : '<div class="msg_profile '      + props.Qy58vo2.toLowerCase() + '"><img src="' + K(..) + '" />'
- * `Qaalbed` is PlayerPropKey.THUMB_URL and `Qy58vo2` is the rarity frame class — both Public
- * scope, i.e. delivered through the `~3` prop roster exactly like SKIN_URL.
+ * Avatar — scoreboard and kill feed use the SAME helper, so one field fixes both:
+ *   K = function(entity, props, cfg) { var i = props.profileURL; ...zombie override...; return i }
+ *   scoreboard: '<div class="msg_profile_score ' + props.skinTier.toLowerCase() + '"><img src="' + K(..) + '">'
+ *   kill feed : '<div class="msg_profile '      + props.skinTier.toLowerCase() + '"><img src="' + K(..) + '" />'
+ * `profileURL` is THUMB_URL and `skinTier` is the rarity frame class — both Public scope, i.e.
+ * delivered through the `~3` cosmetics roster exactly like SKIN_URL.
  *
  * Clan insignia — needs TWO sources and silently renders nothing if either is missing:
  *   h = '';
- *   (entity.Qdqucnz === null || props.Q3ap9pp === null || s) ||
- *     (h = '<a href="' + props.Q3ap9pp + '"><img src="' + entity.Qdqucnz + '" /></a>')
- * i.e. the clan IMAGE is a per-entity field (opcode 235) and the clan LINK is a prop.
+ *   (entity.clanInsignia === null || props.clanHomepage === null || s) ||
+ *     (h = '<a href="' + props.clanHomepage + '"><img src="' + entity.clanInsignia + '" /></a>')
+ * i.e. the clan IMAGE is a per-entity field (opcode 235) and the clan LINK is a roster field.
  *
  * The roster entry shape is unforgiving — the client does
- *   g[e.Qwhkhza] ||= createPlayerPropStore(); g[e.Qwhkhza][e.Qcxi0k5] = e.Qcou9jy
- * so a readable key name silently writes to g["undefined"] and nothing renders.
+ *   v[e.user] ||= getNewAdditionalUserInfo(); v[e.user][e.field] = e.value
+ * so a wrong key name silently writes to v["undefined"] and nothing renders.
  *
  * Usage:  node scripts/test_profile_props.js
  */
@@ -35,7 +38,7 @@ function ok(desc, cond, detail = '') {
   else { console.error(`  ✗ ${desc}${detail ? ' — ' + detail : ''}`); fail++; }
 }
 
-const THUMB = 'Qaalbed', RARITY = 'Qy58vo2', CLAN_LINK = 'Q3ap9pp', SKIN = 'Qh52c4d';
+const THUMB = 'profileURL', RARITY = 'skinTier', CLAN_LINK = 'clanHomepage', SKIN = 'skinUrl';
 
 function session(over) {
   return Object.assign({
@@ -45,35 +48,35 @@ function session(over) {
   }, over || {});
 }
 const roster = (s) => srv.buildPropRoster(new Map([['p1', s]]));
-const find = (r, key) => r.find((e) => e.Qcxi0k5 === key);
+const find = (r, key) => r.find((e) => e.field === key);
 
 console.log('\n── the avatar prop reaches the roster ──');
 {
   const r = roster(session({ thumbUrl: 'https://ev.io//sites/default/files/skin_profile_thumbs/a.png' }));
   const e = find(r, THUMB);
-  ok('THUMB_URL (Qaalbed) is present', !!e);
-  ok('it carries the thumb URL', e && e.Qcou9jy.indexOf('skin_profile_thumbs') !== -1);
-  ok('entity id uses the obfuscated key Qwhkhza', e && e.Qwhkhza === 'p1');
-  ok('prop key uses the obfuscated key Qcxi0k5', e && Object.prototype.hasOwnProperty.call(e, 'Qcxi0k5'));
-  ok('value uses the obfuscated key Qcou9jy', e && Object.prototype.hasOwnProperty.call(e, 'Qcou9jy'));
-  // A readable key would silently write into g["undefined"] and render nothing.
-  ok('no readable key names leak into the entry',
-    e && !('entityId' in e) && !('propKey' in e) && !('propValue' in e));
+  ok('THUMB_URL (profileURL) is present', !!e);
+  ok('it carries the thumb URL', e && e.value.indexOf('skin_profile_thumbs') !== -1);
+  ok('entity id uses the key "user"', e && e.user === 'p1');
+  ok('prop key uses the key "field"', e && Object.prototype.hasOwnProperty.call(e, 'field'));
+  ok('value uses the key "value"', e && Object.prototype.hasOwnProperty.call(e, 'value'));
+  // The old obfuscated key names would silently write into v["undefined"] and render nothing.
+  ok('no stale obfuscated key names leak into the entry',
+    e && !('Qwhkhza' in e) && !('Qcxi0k5' in e) && !('Qcou9jy' in e));
 }
 
 console.log('\n── rarity frame ──');
 {
   const r = roster(session({ skinRarity: 'Rare' }));
   const e = find(r, RARITY);
-  ok('rarity prop (Qy58vo2) is present', !!e, 'the avatar frame class comes from this');
-  ok('it carries the tier string', e && e.Qcou9jy === 'Rare');
+  ok('rarity prop (skinTier) is present', !!e, 'the avatar frame class comes from this');
+  ok('it carries the tier string', e && e.value === 'Rare');
 }
 
 console.log('\n── clan insignia needs BOTH halves ──');
 {
   // Link prop present but no image -> the client's guard leaves the insignia empty.
   const linkOnly = roster(session({ clanLink: 'https://ev.io/clan/1' }));
-  ok('clan link prop (Q3ap9pp) is sent when set', !!find(linkOnly, CLAN_LINK));
+  ok('clan link prop (clanHomepage) is sent when set', !!find(linkOnly, CLAN_LINK));
   // The image travels as opcode 235 on the entity, not as a prop.
   const sb = require('../state_builder');
   const body = sb.buildFirstSpawnBody({ playerId: 'p1', clan: 'https://ev.io/clanlogo.png' });
@@ -96,15 +99,50 @@ console.log('\n── nothing is invented when the account has no cosmetics ─�
   ok('the skin prop is still sent', !!find(r, SKIN));
 }
 
+console.log('\n── weapon skins: current field names pass the join/live-update allow-list ──');
+{
+  // applyLiveLoadout's allow-list (and the equivalent one in the join handler) must accept
+  // exactly the 6 current AdditionalUserInfo weapon-skin field names and reject anything else —
+  // the old obfuscated names (Qcdgi7s etc.) no longer exist in the 1-7-1 bundle at all, so a
+  // leftover allow-list still keyed on them would silently drop every weapon skin.
+  const mk = (id) => ({
+    sessionId: id, playerId: id, accepted: true, displayName: id, uid: 7,
+    playerState: srv.createPlayerSimState({ x: 0, y: 2, z: 0, yaw: 0 }, id),
+    ws: { readyState: 1, OPEN: 1, send() {} },
+    pendingPeerBootstraps: [],
+  });
+  const a = mk('a');
+  const sessions = new Map([['a', a]]);
+  srv.applyLiveLoadout(a, a.playerState, JSON.stringify({
+    weaponSkins: {
+      autoRifleSkinUrl: 'https://ev.io/sites/default/files/skins/auto.evskin',
+      swordSkinUrl: 'https://ev.io/sites/default/files/skins/sword.evskin',
+      Qcdgi7s: 'https://ev.io/sites/default/files/skins/stale-key.evskin',
+      notAWeaponField: 'https://ev.io/should-not-pass.evskin',
+    },
+  }), sessions);
+  ok('a current field name (autoRifleSkinUrl) is kept',
+    a.weaponSkins && a.weaponSkins.autoRifleSkinUrl === 'https://ev.io/sites/default/files/skins/auto.evskin');
+  ok('another current field name (swordSkinUrl) is kept',
+    a.weaponSkins && a.weaponSkins.swordSkinUrl === 'https://ev.io/sites/default/files/skins/sword.evskin');
+  ok('the old obfuscated key (Qcdgi7s) is dropped', a.weaponSkins && !('Qcdgi7s' in a.weaponSkins));
+  ok('an unrecognized key is dropped', a.weaponSkins && !('notAWeaponField' in a.weaponSkins));
+
+  const roster2 = srv.buildPropRoster(sessions);
+  const auto = roster2.find((e) => e.field === 'autoRifleSkinUrl');
+  ok('the kept weapon skin reaches the ~3 roster under its own field name',
+    !!auto && auto.user === 'a' && auto.value === 'https://ev.io/sites/default/files/skins/auto.evskin');
+}
+
 console.log('\n── multiple players each get their own entries ──');
 {
   const a = session({ sessionId: 'a', thumbUrl: 'http://x/a.png' });
   const b = session({ sessionId: 'b', thumbUrl: 'http://x/b.png' });
   const r = srv.buildPropRoster(new Map([['a', a], ['b', b]]));
-  const thumbs = r.filter((e) => e.Qcxi0k5 === THUMB);
+  const thumbs = r.filter((e) => e.field === THUMB);
   ok('one avatar entry per player', thumbs.length === 2, `got ${thumbs.length}`);
   ok('keyed by their own sessionId',
-    thumbs.some((e) => e.Qwhkhza === 'a') && thumbs.some((e) => e.Qwhkhza === 'b'));
+    thumbs.some((e) => e.user === 'a') && thumbs.some((e) => e.user === 'b'));
 }
 
 
