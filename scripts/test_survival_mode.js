@@ -80,32 +80,40 @@ function splitPickupBlocks(block) {
       String(S.get('survivalBossDamageResist')));
   }
 
-  console.log('\n── protocol: opcode 298 (round start tick) and 237/239 (isBot/isBoss) ──');
+  console.log('\n── protocol: opcode 298 (round start tick) and 237/239/240 (isBot/isBoss/isZombie) ──');
   {
-    // These three opcodes were confirmed against the REAL client bundle (not guessed): 298 is
-    // Qpa5f8z, decoded straight into the client's own Qmpb4uv wave-number formula; 237/239 are
-    // Qcvoys2/Qqw6dra, read directly off each per-entity object by the "{N} bots alive"/"Kill the
-    // boss!" HUD code and by the survival scoreboard-hide rule. All three were either never sent
-    // at all (298) or hardcoded false for every entity (237/239) before this.
+    // These opcodes were confirmed against the REAL client bundle (not guessed): 298 is Qpa5f8z,
+    // decoded straight into the client's own Qmpb4uv wave-number formula; 237/239/240 are
+    // Qcvoys2/Qqw6dra/(now-readable isZombie in 1-7-1), read directly off each per-entity object
+    // by the "{N} bots alive"/"Kill the boss!" HUD code, the survival scoreboard-hide rule, and —
+    // for 240 — the ZOMBIE_RUN animation + 'zombie_death' sound selection. All were either never
+    // sent at all (298) or hardcoded false for every entity (237/239/240) before this.
     srv.match.roundStartTick = 1234;
     const tick = srv.buildTickBody('p', 9999, srv.createPlayerSimState({ x: 0, y: 2, z: 0, yaw: 0 }, 'p'), new Map());
     ok('opcode 298 carries the live round-start tick, not a constant',
       readOp(tick, 298) === 1234, String(readOp(tick, 298)));
 
-    const botPeer = { playerId: 'bp', tick: 1, displayName: 'Bot', uid: -1001, isBot: true, isBoss: false,
+    const botPeer = { playerId: 'bp', tick: 1, displayName: 'Bot', uid: -1001, isBot: true, isBoss: false, isZombie: false,
       playerState: srv.createPlayerSimState({ x: 0, y: 2, z: 0, yaw: 0 }, 'bp') };
-    const bossPeer = { playerId: 'bo', tick: 1, displayName: 'BOSS', uid: -1002, isBot: true, isBoss: true,
+    const bossPeer = { playerId: 'bo', tick: 1, displayName: 'BOSS', uid: -1002, isBot: true, isBoss: true, isZombie: false,
       playerState: srv.createPlayerSimState({ x: 0, y: 2, z: 0, yaw: 0 }, 'bo') };
-    const realPeer = { playerId: 'rp', tick: 1, displayName: 'Real', uid: 7, isBot: false, isBoss: false,
+    const zombiePeer = { playerId: 'zp', tick: 1, displayName: 'Zombie', uid: -1003, isBot: true, isBoss: false, isZombie: true,
+      playerState: srv.createPlayerSimState({ x: 0, y: 2, z: 0, yaw: 0 }, 'zp') };
+    const realPeer = { playerId: 'rp', tick: 1, displayName: 'Real', uid: 7, isBot: false, isBoss: false, isZombie: false,
       playerState: srv.createPlayerSimState({ x: 0, y: 2, z: 0, yaw: 0 }, 'rp') };
     const botDelta = srv.buildPeerBootstrapDelta(botPeer);
     const bossDelta = srv.buildPeerBootstrapDelta(bossPeer);
+    const zombieDelta = srv.buildPeerBootstrapDelta(zombiePeer);
     const realDelta = srv.buildPeerBootstrapDelta(realPeer);
     ok('a bot peer carries opcode 237 (isBot) true', readOp(botDelta, 237) === true, String(readOp(botDelta, 237)));
     ok('a bot peer carries opcode 239 (isBoss) false', readOp(botDelta, 239) === false);
+    ok('a plain bot peer carries opcode 240 (isZombie) false', readOp(botDelta, 240) === false);
     ok('a boss peer carries BOTH 237 and 239 true', readOp(bossDelta, 237) === true && readOp(bossDelta, 239) === true);
-    ok('a real player peer carries 237/239 false', readOp(realDelta, 237) === false && readOp(realDelta, 239) === false);
+    ok('a zombie peer carries opcode 240 (isZombie) true', readOp(zombieDelta, 240) === true, String(readOp(zombieDelta, 240)));
+    ok('a real player peer carries 237/239/240 false',
+      readOp(realDelta, 237) === false && readOp(realDelta, 239) === false && readOp(realDelta, 240) === false);
   }
+
 
   console.log('\n── wave escalation: bot count/level climb, a boss appears on schedule ──');
   {
@@ -260,6 +268,8 @@ function splitPickupBlocks(block) {
       meleeBots().every((b) => b.playerState.equippedWeaponId === srv.ZOMBIE_MELEE_WEAPON_ID),
       JSON.stringify(meleeBots().map((b) => b.playerState.equippedWeaponId)));
     ok('it uses the sword-bot AI branch (isSwordBot)', meleeBots().every((b) => b.isSwordBot === true));
+    ok('it carries isZombie (opcode 240) — drives ZOMBIE_RUN anim + zombie_death sound',
+      meleeBots().every((b) => b.isZombie === true));
     ok('it gets the zombie skin, not the generic bot skin',
       meleeBots().every((b) => b.skinUrl.includes('zombiebot')), JSON.stringify(meleeBots().map((b) => b.skinUrl)));
     ok('its Teleport ability seed is level 1 (1 charge), not the sword bot\'s level 5',
