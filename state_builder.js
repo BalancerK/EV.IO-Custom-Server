@@ -268,8 +268,13 @@ function buildFirstSpawnBody(options = {}) {
     150, 9999,
     151, -99999,
     152, -9999,
-    155, 1,
-    156, 1,
+    // 155 Qcqglqd / 156 Qte59p5 — player model scale (render + "confirmed fits" collision-check
+    // target, synced to the same value since we never need the client's own gradual grow/shrink
+    // transition). Confirmed from the real client bundle (w.scale.set(entity.Qcqglqd,...)).
+    // Survival's boss is "slightly bigger" (the gamemode config even ships a bossScale constant,
+    // default 1, meaning official leaves it bigger than that at runtime) — everyone else stays 1.
+    155, Number.isFinite(options.modelScale) ? options.modelScale : 1,
+    156, Number.isFinite(options.modelScale) ? options.modelScale : 1,
     157, 0,
     158, baseStamina,
     159, baseStamina / 4,
@@ -358,9 +363,21 @@ function buildFirstSpawnBody(options = {}) {
     234, Array.isArray(options.cosmetics) ? options.cosmetics : [],
     235, options.clan ?? null,
     236, options.extraMeta ?? null,
-    237, false,
-    238, 1,
-    239, false,
+    // 237 Qcvoys2 = isBot. Drives the client's own "{N} bots alive" count AND the survival
+    // scoreboard-hide rule (both read this per-entity flag directly, client-side — see the
+    // survival mode comment in local_ws_server.js's buildPeerBootstrapDelta). Was hardcoded
+    // false for every entity, bot or not, which is why neither ever worked.
+    237, !!options.isBot,
+    // 238 Qyamlj — overloaded by the real client: for a plain bot it's the "lvl N" scoreboard
+    // badge; for a BOSS specifically it's instead read as a reward amount for the
+    // "{boss} spawned with {N}e reward" chat line. Same wire slot, different meaning picked by
+    // the isBoss flag (239) on the SAME entity — not a bug, confirmed from the real bundle (both
+    // reads are literally `entity.Qyamlj`, just in two different call sites keyed on Qqw6dra).
+    238, options.isBoss ? (Number.isFinite(options.bossReward) ? options.bossReward : 500)
+        : (Number.isFinite(options.botLevel) ? options.botLevel : 1),
+    // 239 Qqw6dra = isBoss. Drives the "Kill the boss!" HUD text and the boss HP-bar overlay —
+    // also hardcoded false before.
+    239, !!options.isBoss,
     240, false,
     241, null,
     242, 0,
@@ -371,6 +388,11 @@ function buildFirstSpawnBody(options = {}) {
     // waiting/intermission phase that can leave the loading/lobby overlay up.
     280, gamePhase
   );
+  // Qpa5f8z (opcode 298) — the tick the current round started. Decoded AFTER the entity block
+  // (298 > 280 numerically, same ascending-scan rule as everything else), so it rides here, not
+  // inside the push() above. Survival's own HUD computes elapsed round time from this entirely
+  // client-side — see local_ws_server.js's match.roundStartTick comment for the full story.
+  body.push(298, Number.isFinite(options.roundStartTick) ? options.roundStartTick : 0);
 
   return body;
 }
