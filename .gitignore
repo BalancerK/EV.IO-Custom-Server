@@ -7,3 +7,6 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# Player-made maps (custom_maps/README.md stays)
+custom_maps/*.evmap

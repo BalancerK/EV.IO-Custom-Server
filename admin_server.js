@@ -242,8 +242,8 @@ function startAdminServer(game) {
         const cached = new Set(game.mapLoader.cachedMaps().map((m) => m.nid));
         return json(res, 200, {
           active: game.getStatus().map,
-          maps: game.mapLoader.listMaps().map((m) => ({
-            nid: m.nid, title: m.title, cached: cached.has(m.nid), inRotation: m.inRotation,
+          maps: game.mapLoader.listAllMaps().map((m) => ({
+            nid: m.nid, title: m.title, cached: m.custom || cached.has(m.nid), inRotation: m.inRotation, custom: !!m.custom,
           })),
         });
       }

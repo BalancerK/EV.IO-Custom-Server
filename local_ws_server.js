@@ -86,6 +86,12 @@ let PORT = S.define({
   key: "port", env: "EVIO_LOCAL_PORT", type: "int", def: 8080, min: 1, max: 65535, live: false,
   category: "Server", label: "Bind port", desc: "Game WebSocket port the client connects to.",
 }, (v) => { PORT = v; });
+// Where clients download custom maps from (GET /maps/<file> on this same port — see
+// serveCustomMap). Set here, at load, because the startup map is resolved before the socket opens
+// and its URL is fixed at that moment. EVIO_PUBLIC_HTTP_BASE overrides it for a server reached
+// through another address (a domain, a proxy, a LAN IP).
+mapLoader.setPublicBase(process.env.EVIO_PUBLIC_HTTP_BASE
+  || `http://${HOST === "0.0.0.0" || HOST === "::" ? "127.0.0.1" : HOST}:${PORT}`);
 let TICK_MS = S.define({
   key: "tickMs", env: "EVIO_TICK_MS", type: "int", def: 50, min: 10, max: 200, live: false,
   category: "Server", label: "Tick interval (ms)",
@@ -10111,11 +10117,65 @@ function adminServerAction(action, arg) {
   }
 }
 
+// GET /maps/<name>.evmap -> custom_maps/<name>.evmap, readable cross-origin (the game page is on
+// https://ev.io; three.js's FileLoader fetches the map with CORS). Nothing else is served. The
+// Private-Network header answers Chrome's preflight for a public page reaching a loopback address.
+function serveCustomMap(req, res) {
+  const cors = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, HEAD, OPTIONS",
+    "access-control-allow-private-network": "true",
+    "x-content-type-options": "nosniff",
+  };
+  let pathname = "";
+  try { pathname = decodeURIComponent(new URL(req.url, "http://x").pathname); } catch { /* malformed */ }
+  const match = /^\/maps\/([^/]+)$/.exec(pathname);
+  const file = match ? mapLoader.customMapPath(match[1]) : null;
+  if (req.method === "OPTIONS" && file) {
+    res.writeHead(204, { ...cors, "access-control-max-age": "600" });
+    return res.end();
+  }
+  if ((req.method !== "GET" && req.method !== "HEAD") || !file) {
+    res.writeHead(404, { "content-type": "text/plain" });
+    return res.end("not found");
+  }
+  let buf;
+  try { buf = fs.readFileSync(file); } catch {
+    res.writeHead(404, { "content-type": "text/plain" });
+    return res.end("not found");
+  }
+  res.writeHead(200, {
+    ...cors,
+    "content-type": "application/octet-stream",
+    "content-length": buf.length,
+    // Re-exporting a map under the same name must reach clients on the next load.
+    "cache-control": "no-cache",
+  });
+  return res.end(req.method === "HEAD" ? undefined : buf);
+}
+
 function startServer() {
   // maxPayload caps a single inbound frame. `ws` defaults to 100 MiB, so without this one frame
   // from a hostile client makes the server allocate 100 MB. Real client input is a few hundred
   // bytes; 64 KiB is generous even for a join carrying identity and loadout.
-  const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: MAX_PAYLOAD_BYTES });
+  //
+  // The socket rides on a plain HTTP server so the same port can also serve custom maps: a game
+  // client downloads the .evmap named in opcode 15 itself, so a map that exists only on this
+  // machine (custom_maps/, e.g. exported from EVMap Forge) must be fetchable from here. Only
+  // GET /maps/<name>.evmap is served, from custom_maps/ only; every other path is a 404. `http` is
+  // required lazily because this file is also bundled for the browser, where it does not exist.
+  let wss;
+  let httpModule = null;
+  try { httpModule = require("http"); } catch { /* browser bundle: socket only */ }
+  if (httpModule && typeof httpModule.createServer === "function") {
+    const httpServer = httpModule.createServer((req, res) => serveCustomMap(req, res));
+    // ws forwards the HTTP server's `listening` and `error` events to wss, so the existing
+    // wss.on("listening"/"error") handlers below keep working unchanged.
+    wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_PAYLOAD_BYTES });
+    httpServer.listen(PORT, HOST);
+  } else {
+    wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: MAX_PAYLOAD_BYTES });
+  }
   const sessions = new Map();
   _live.sessions = sessions;
   // spawnBot/removeBot/listBots close over this closure's `sessions`, `globalTick` and

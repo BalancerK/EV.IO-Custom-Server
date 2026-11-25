@@ -123,6 +123,15 @@ refuse to start with `EVIO_ADMIN_HOST` set to anything non-loopback unless `EVIO
 also set — and even then, the token travels in cleartext over plain HTTP, so treat that as a
 last resort, not a real security boundary.
 
+## Custom maps
+
+Drop any `.evmap` (for example one exported from EVMap Forge) into `custom_maps/`. It shows up in
+the dashboard's map picker as `custom:<file name>`, or start on it with
+`EVIO_STARTUP_MAP=custom:<file name>`. Players' browsers download it from the game port itself
+(`GET /maps/<file name>`, the only HTTP path the game port serves), so nothing has to be hosted
+elsewhere. If players reach the server through another address than `127.0.0.1:<port>` (a domain,
+a proxy, a LAN IP), set `EVIO_PUBLIC_HTTP_BASE` to that origin, e.g. `https://game.example.com`.
+
 ## The WebRTC (netlib) transport
 
 By default this server only speaks WebSocket, same as the official one. Setting

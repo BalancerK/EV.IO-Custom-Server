@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ev.io - Custom Server
 // @namespace    evio-local-research
-// @version      1.2
+// @version      1.3
 // @description  Play ev.io on a custom server, over WebSocket or WebRTC. Official by default; press "Join Test Server" to switch.
 // @match        https://ev.io/*
 // @run-at       document-start
@@ -669,7 +669,9 @@
     function isEvioGameSocket(url) {
         if (typeof url !== 'string') return false;
         if (isEvioSocialSocket(url)) return false;
-        return /wss?:\/\/evio-[^/]+\.rivet\.game\/?/i.test(url) || /wss?:\/\/evio-[^/]+/i.test(url);
+        // 1-7-0 used evio-*.rivet.game; 1-7-1 moved to the matchmaker's own hosts,
+        // wss://ev-game-<region>.<ip>.sslip.io/ws (zd.SHARED_CONFIG.matchmakerRegions).
+        return /wss?:\/\/evio-[^/]+/i.test(url) || /wss?:\/\/ev-game-[^/]+/i.test(url);
     }
 
     (function installCustomWebSocketRouter() {
@@ -901,10 +903,31 @@
         return _origSA.apply(this, arguments);
     };
 
+    // ev.io 1-7-1 matchmaking: the client asks {region}/matchmaker/rooms (POST to find or create a
+    // room, GET /rooms/<id> to join one, GET /rooms to list) and then opens the returned room's
+    // connectionUrl. In custom mode every one of those calls is answered here with a single local
+    // room whose connectionUrl IS the custom server, so the page never creates or joins a real ev.io
+    // room and the game socket goes straight to the custom server.
+    function customMatchmakerResponse(url, method) {
+        var cfg = PAGE.__EVIO_CUSTOM__;
+        if (!cfg || !cfg.enabled || cfg.transport === 'netlib') return null;
+        var path;
+        try { path = new URL(url, location.href).pathname; } catch (_) { return null; }
+        var m = /\/matchmaker\/rooms(\/[^/]+)?\/?$/.exec(path);
+        if (!m) return null;
+        var room = { id: cfg.lobbyId, gamemode: cfg.gamemode, region: cfg.region, connectionUrl: cfg.serverUrl };
+        // GET /rooms lists rooms (an array); POST /rooms and GET /rooms/<id> return one room.
+        var body = (!m[1] && !/POST/i.test(method || 'GET')) ? [room] : room;
+        _con.log('%c[evio-custom] matchmaker call answered locally', 'color:#ff9800', path, '->', cfg.serverUrl);
+        return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
     var _fetchOrig = PAGE.fetch;
     PAGE.fetch = function(input, init) {
         var url = typeof input==='string' ? input : (input && input.url)||'';
         if (isDomainBlocked(url)) return Promise.resolve(new Response('',{status:200}));
+        var fake = customMatchmakerResponse(url, (init && init.method) || (input && input.method) || 'GET');
+        if (fake) return Promise.resolve(fake);
         return _fetchOrig.apply(this, arguments);
     };
 

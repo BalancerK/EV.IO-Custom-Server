@@ -38,6 +38,47 @@ const WORLD_CACHE_MAX = Number(process.env.EVIO_MAP_WORLD_CACHE || 3);
 
 let _catalogue = null;
 
+// ── Custom maps ──────────────────────────────────────────────────────────────────────────────
+// Any .evmap dropped into custom_maps/ (e.g. one exported from EVMap Forge) is a selectable map,
+// listed as nid "custom:<file name>". The SERVER reads it straight from disk; the CLIENT downloads
+// it from this server's own port (GET /maps/<file>, served by local_ws_server.js with CORS), since
+// a game client only ever fetches the URL it is sent in opcode 15. setPublicBase() sets the origin
+// clients are told to use; it defaults to the loopback game port.
+const CUSTOM_DIR = process.env.EVIO_CUSTOM_MAPS || path.join(__dirname, 'custom_maps');
+const CUSTOM_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.evmap$/;
+let _publicBase = (process.env.EVIO_PUBLIC_HTTP_BASE || 'http://127.0.0.1:8080').replace(/\/+$/, '');
+
+function setPublicBase(base) { _publicBase = String(base).replace(/\/+$/, ''); }
+function publicBase() { return _publicBase; }
+
+// Absolute path of a custom map file, or null when the name is not a plain .evmap file name in
+// custom_maps/ (no directories, no traversal, nothing else served).
+function customMapPath(file) {
+  if (typeof file !== 'string' || !CUSTOM_FILE_RE.test(file)) return null;
+  const full = path.join(CUSTOM_DIR, file);
+  if (path.dirname(full) !== path.resolve(CUSTOM_DIR)) return null;
+  try { return fs.statSync(full).isFile() ? full : null; } catch { return null; }
+}
+
+function listCustomMaps() {
+  let files = [];
+  try { files = fs.readdirSync(CUSTOM_DIR).filter((f) => CUSTOM_FILE_RE.test(f)).sort(); } catch { return []; }
+  return files.map((file) => {
+    const base = file.replace(/\.evmap$/i, '');
+    const title = base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    return {
+      nid: `custom:${base}`,
+      title,
+      evmapUrl: `${_publicBase}/maps/${encodeURIComponent(file)}`,
+      thumbUrl: null,
+      largeImageUrl: null,
+      inRotation: false,
+      custom: true,
+      localPath: path.join(CUSTOM_DIR, file),
+    };
+  });
+}
+
 /**
  * All maps from the catalogue: { nid, title, evmapUrl, thumbUrl, inRotation }.
  * Maps without an .evmap file are skipped — they cannot be loaded.
@@ -87,7 +128,7 @@ function listMaps() {
 }
 
 function findMap(idOrTitleOrUrl) {
-  const maps = listMaps();
+  const maps = [...listCustomMaps(), ...listMaps()];
   const key = String(idOrTitleOrUrl);
   return maps.find((m) => String(m.nid) === key)
       || maps.find((m) => m.title.toLowerCase() === key.toLowerCase())
@@ -149,10 +190,18 @@ async function loadMap(idOrTitleOrUrl) {
   const map = findMap(idOrTitleOrUrl);
   if (!map) throw new Error(`unknown map: ${idOrTitleOrUrl}`);
 
-  const hit = _worldCache.get(map.evmapUrl);
+  // A custom map can be re-exported under the same name, so its cache key includes the file's
+  // modification time: a new export is rebuilt, an unchanged one is reused.
+  let cacheKey = map.evmapUrl;
+  if (map.localPath) {
+    try { cacheKey += `#${fs.statSync(map.localPath).mtimeMs}`; } catch { throw new Error(`custom map file missing: ${map.localPath}`); }
+  }
+  const hit = _worldCache.get(cacheKey);
   if (hit) return { ...hit, fromCache: true, buildMs: 0 };
 
-  const { buf, fromCache } = await fetchEvmap(map.evmapUrl);
+  const { buf, fromCache } = map.localPath
+    ? { buf: fs.readFileSync(map.localPath), fromCache: true }
+    : await fetchEvmap(map.evmapUrl);
   const t0 = Date.now();
   const built = bpw.buildWorldFromEvmapBuffer(buf, map.title);
   const buildMs = Date.now() - t0;
@@ -166,7 +215,7 @@ async function loadMap(idOrTitleOrUrl) {
                   navmesh: built.navmesh || [], pickupPoints: built.pickupPoints || [],
                   vertices: built.vertices, indices: built.indices, groupIds: built.groupIds,
                   tris: built.indices.length / 3 };
-  _worldCache.set(map.evmapUrl, entry);
+  _worldCache.set(cacheKey, entry);
   // Bound the in-memory cache (worlds are multi-MB); evict the oldest.
   while (_worldCache.size > WORLD_CACHE_MAX) {
     _worldCache.delete(_worldCache.keys().next().value);
@@ -181,4 +230,8 @@ function cachedMaps() {
   return listMaps().filter((m) => names.has(path.basename(new URL(m.evmapUrl).pathname)));
 }
 
-module.exports = { listMaps, findMap, loadMap, fetchEvmap, cachedMaps, CACHE_DIR };
+// The catalogue plus custom maps, custom first (for the dashboard's map picker).
+function listAllMaps() { return [...listCustomMaps(), ...listMaps()]; }
+
+module.exports = { listMaps, listAllMaps, listCustomMaps, findMap, loadMap, fetchEvmap, cachedMaps,
+  customMapPath, setPublicBase, publicBase, CACHE_DIR, CUSTOM_DIR };
