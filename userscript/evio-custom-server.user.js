@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ev.io - Custom Server
 // @namespace    evio-local-research
-// @version      1.3
+// @version      1.4
 // @description  Play ev.io on a custom server, over WebSocket or WebRTC. Official by default; press "Join Test Server" to switch.
 // @match        https://ev.io/*
 // @run-at       document-start
@@ -104,13 +104,13 @@
         try {
             var cfg = PAGE.__EVIO_CUSTOM__;
             if (cfg && cfg.enabled && oldState && newState) {
-                newState.Qcrzrpr = oldState.Qcrzrpr;
-                newState.Qd0yy90 = oldState.Qd0yy90;
+                newState.pitch = oldState.pitch;
+                newState.pitchOffset = oldState.pitchOffset;
 
-                newState.Qq1azjr = oldState.Qq1azjr;
-                newState.Qq1azd5 = oldState.Qq1azd5;
-                newState.Qm2pxgr = oldState.Qm2pxgr;
-                if (oldState.Qwf7j5k) newState.Qwf7j5k = oldState.Qwf7j5k;
+                newState.camKnockbackMin = oldState.camKnockbackMin;
+                newState.camKnockbackMax = oldState.camKnockbackMax;
+                newState.yOffsetStack = oldState.yOffsetStack;
+                if (oldState.weapons) newState.weapons = oldState.weapons;
             }
         } catch (e) { }
         return newState;
@@ -301,12 +301,12 @@
             return null;
         }
         var WEAPON_SKIN_MAP = [
-            { acct: 'field_auto_rifle_skin',  prop: 'Qcdgi7s' },
-            { acct: 'field_hand_cannon_skin', prop: 'Qy8jpjd' },
-            { acct: 'field_laser_rifle_skin', prop: 'Qclpb4q' },
-            { acct: 'field_burst_rifle_skin', prop: 'Qb9vw3f' },
-            { acct: 'field_sweeper_skin',     prop: 'Ql3d4qw' },
-            { acct: 'field_sword_skin',       prop: 'Q53m0bo' }
+            { acct: 'field_auto_rifle_skin',  prop: 'autoRifleSkinUrl' },
+            { acct: 'field_hand_cannon_skin', prop: 'handCannonSkinUrl' },
+            { acct: 'field_laser_rifle_skin', prop: 'laserRifleSkinUrl' },
+            { acct: 'field_burst_rifle_skin', prop: 'burstRifleSkinUrl' },
+            { acct: 'field_sweeper_skin',     prop: 'sweeperSkinUrl' },
+            { acct: 'field_sword_skin',       prop: 'swordSkinUrl' }
         ];
         function resolveWeaponSkins(acc) {
             var out = {};
@@ -965,29 +965,29 @@
             {
 
                 name: '6b7 custom-mode: skip pitch + pitchOffset (production comparator; see 6b9)',
-                from: 'Math.abs(e.Qcrzrpr-t.Qcrzrpr)>1e-4||Math.abs(e.Qd0yy90-t.Qd0yy90)>1e-4||',
-                to:   '(!(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)&&(Math.abs(e.Qcrzrpr-t.Qcrzrpr)>1e-4||Math.abs(e.Qd0yy90-t.Qd0yy90)>1e-4))||',
+                from: "Math.abs(e.pitch-t.pitch)>1e-4||Math.abs(e.pitchOffset-t.pitchOffset)>1e-4||",
+                to:   "(!(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)&&(Math.abs(e.pitch-t.pitch)>1e-4||Math.abs(e.pitchOffset-t.pitchOffset)>1e-4))||",
             },
             {
 
                 name: '6b9 custom-mode: skip pitch + pitchOffset in the DEBUG comparator (the live one)',
-                from: "Math.abs(e.Qcrzrpr-t.Qcrzrpr)>1e-4&&n.push('pitch  =>  Server: '+JSON.stringify(e.Qcrzrpr)+'   Client: '+JSON.stringify(t.Qcrzrpr)),Math.abs(e.Qd0yy90-t.Qd0yy90)>1e-4&&n.push('pitchOffset  =>  Server: '+JSON.stringify(e.Qd0yy90)+'   Client: '+JSON.stringify(t.Qd0yy90)),",
-                to:   "!(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)&&(Math.abs(e.Qcrzrpr-t.Qcrzrpr)>1e-4&&n.push('pitch  =>  Server: '+JSON.stringify(e.Qcrzrpr)+'   Client: '+JSON.stringify(t.Qcrzrpr)),Math.abs(e.Qd0yy90-t.Qd0yy90)>1e-4&&n.push('pitchOffset  =>  Server: '+JSON.stringify(e.Qd0yy90)+'   Client: '+JSON.stringify(t.Qd0yy90))),",
+                from: "Math.abs(e.pitch-t.pitch)>1e-4&&a.push('pitch  =>  Server: '+JSON.stringify(e.pitch)+'   Client: '+JSON.stringify(t.pitch)),Math.abs(e.pitchOffset-t.pitchOffset)>1e-4&&a.push('pitchOffset  =>  Server: '+JSON.stringify(e.pitchOffset)+'   Client: '+JSON.stringify(t.pitchOffset)),",
+                to:   "!(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)&&(Math.abs(e.pitch-t.pitch)>1e-4&&a.push('pitch  =>  Server: '+JSON.stringify(e.pitch)+'   Client: '+JSON.stringify(t.pitch)),Math.abs(e.pitchOffset-t.pitchOffset)>1e-4&&a.push('pitchOffset  =>  Server: '+JSON.stringify(e.pitchOffset)+'   Client: '+JSON.stringify(t.pitchOffset))),",
             },
             {
                 name: '6b8 custom-mode: preserve recoil + ammo through reconcile reset',
-                from: 'this.Qxo2o14[t].Qt03jhz.Qcvr9bt=this.Qh23rk3.Q820rrc(e.body)',
-                to:   'this.Qxo2o14[t].Qt03jhz.Qcvr9bt=(window.__EVIO_PRESERVE_RECON__?window.__EVIO_PRESERVE_RECON__(this.Qxo2o14[t].Qt03jhz.Qcvr9bt,this.Qh23rk3.Q820rrc(e.body)):this.Qh23rk3.Q820rrc(e.body))',
+                from: "this.tickHistory[t].clientState.inner=this.sessionHandler.takeServerState(e.body)",
+                to:   "this.tickHistory[t].clientState.inner=(window.__EVIO_PRESERVE_RECON__?window.__EVIO_PRESERVE_RECON__(this.tickHistory[t].clientState.inner,this.sessionHandler.takeServerState(e.body)):this.sessionHandler.takeServerState(e.body))",
             },
             {
                 name: 'CH1 custom-mode: send all chat over the game socket (social is dead)',
-                from: "a.includes('/examine')||a.includes('/dance'))lb.Ql1g6nk.Qam4u9w.Qm0eht4({msg:a})",
-                to:   "(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)||a.includes('/examine')||a.includes('/dance'))lb.Ql1g6nk.Qam4u9w.Qm0eht4({msg:a})",
+                from: "i.includes('/examine')||i.includes('/dance'))ub.ConnectionActions.instance.sendChatMessage({msg:i})",
+                to:   "(window.__EVIO_CUSTOM__&&window.__EVIO_CUSTOM__.enabled)||i.includes('/examine')||i.includes('/dance'))ub.ConnectionActions.instance.sendChatMessage({msg:i})",
             },
             {
                 name: 'SR1 forward exact shot ray + sessionId to custom server',
-                from: "u.push({Q7q6byi:f+':'+p+':'+a,Q616y7o:0,Qxluan:p,Qtql1ud:l.clone(),Qsjaj00:v,",
-                to:   "(window.__EVIO_SHOTRAY__&&window.__EVIO_SHOTRAY__(l,v,f+':'+p+':'+a)),u.push({Q7q6byi:f+':'+p+':'+a,Q616y7o:0,Qxluan:p,Qtql1ud:l.clone(),Qsjaj00:v,",
+                from: "u.push({id:f+':'+h+':'+i,eventAge:0,ownerId:h,origin:l.clone(),direction:y,",
+                to:   "(window.__EVIO_SHOTRAY__&&window.__EVIO_SHOTRAY__(l,y,f+':'+h+':'+i)),u.push({id:f+':'+h+':'+i,eventAge:0,ownerId:h,origin:l.clone(),direction:y,",
             },
         ];
 
