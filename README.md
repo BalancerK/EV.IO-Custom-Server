@@ -125,7 +125,7 @@ last resort, not a real security boundary.
 
 ## Custom maps
 
-Drop any `.evmap` (for example one exported from EVMap Forge) into `custom_maps/`. It shows up in
+Drop any `.evmap` (for example one exported from [EV.IO Map Editor](https://balancerk.github.io/EV.IO-MAP-EDITOR/)) into `custom_maps/`. It shows up in
 the dashboard's map picker as `custom:<file name>`, or start on it with
 `EVIO_STARTUP_MAP=custom:<file name>`. Players' browsers download it from the game port itself
 (`GET /maps/<file name>`, the only HTTP path the game port serves), so nothing has to be hosted

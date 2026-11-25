@@ -39,7 +39,7 @@ const WORLD_CACHE_MAX = Number(process.env.EVIO_MAP_WORLD_CACHE || 3);
 let _catalogue = null;
 
 // ── Custom maps ──────────────────────────────────────────────────────────────────────────────
-// Any .evmap dropped into custom_maps/ (e.g. one exported from EVMap Forge) is a selectable map,
+// Any .evmap dropped into custom_maps/ (e.g. one exported from EV.IO Map Editor) is a selectable map,
 // listed as nid "custom:<file name>". The SERVER reads it straight from disk; the CLIENT downloads
 // it from this server's own port (GET /maps/<file>, served by local_ws_server.js with CORS), since
 // a game client only ever fetches the URL it is sent in opcode 15. setPublicBase() sets the origin

@@ -10161,7 +10161,7 @@ function startServer() {
   //
   // The socket rides on a plain HTTP server so the same port can also serve custom maps: a game
   // client downloads the .evmap named in opcode 15 itself, so a map that exists only on this
-  // machine (custom_maps/, e.g. exported from EVMap Forge) must be fetchable from here. Only
+  // machine (custom_maps/, e.g. exported from EV.IO Map Editor) must be fetchable from here. Only
   // GET /maps/<name>.evmap is served, from custom_maps/ only; every other path is a 404. `http` is
   // required lazily because this file is also bundled for the browser, where it does not exist.
   let wss;
