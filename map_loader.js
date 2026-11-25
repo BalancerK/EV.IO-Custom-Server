@@ -26,6 +26,7 @@ const path = require('path');
 const https = require('https');
 const bpw = require('./physics_world');
 const phys = require('./physics_extracted');
+const extraMaps = require('./extra_maps');
 
 const CMS_BASE = 'https://ev.io';
 const CATALOGUE = path.join(__dirname, 'maps.json');
@@ -80,10 +81,25 @@ function listCustomMaps() {
 }
 
 /**
- * All maps from the catalogue: { nid, title, evmapUrl, thumbUrl, inRotation }.
- * Maps without an .evmap file are skipped — they cannot be loaded.
+ * All maps: the official catalogue snapshot (maps.json) plus the hosted extra-maps list
+ * (extra_maps.js), as { nid, title, evmapUrl, thumbUrl, largeImageUrl, inRotation }. An extra entry
+ * replaces a snapshot entry with the same nid (a re-uploaded file wins). Re-merged whenever the
+ * hosted list changes, so new maps appear without a restart.
  */
+let _merged = null, _mergedVersion = -1;
 function listMaps() {
+  const base = baseCatalogue();
+  if (_merged && _mergedVersion === extraMaps.version()) return _merged;
+  const extra = extraMaps.entries();
+  const extraIds = new Set(extra.map((m) => String(m.nid)));
+  _merged = base.filter((m) => !extraIds.has(String(m.nid))).concat(extra)
+    .sort((x, y) => String(x.title).localeCompare(String(y.title)));
+  _mergedVersion = extraMaps.version();
+  return _merged;
+}
+
+// Maps without an .evmap file are skipped — they cannot be loaded.
+function baseCatalogue() {
   if (_catalogue) return _catalogue;
   let raw;
   try {
@@ -233,5 +249,5 @@ function cachedMaps() {
 // The catalogue plus custom maps, custom first (for the dashboard's map picker).
 function listAllMaps() { return [...listCustomMaps(), ...listMaps()]; }
 
-module.exports = { listMaps, listAllMaps, listCustomMaps, findMap, loadMap, fetchEvmap, cachedMaps,
+module.exports = { listMaps, listAllMaps, extraMaps, listCustomMaps, findMap, loadMap, fetchEvmap, cachedMaps,
   customMapPath, setPublicBase, publicBase, CACHE_DIR, CUSTOM_DIR };

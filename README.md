@@ -123,11 +123,23 @@ refuse to start with `EVIO_ADMIN_HOST` set to anything non-loopback unless `EVIO
 also set — and even then, the token travels in cleartext over plain HTTP, so treat that as a
 last resort, not a real security boundary.
 
-## Custom maps
+## Maps
 
-Drop any `.evmap` (for example one exported from [EV.IO Map Editor](https://balancerk.github.io/EV.IO-MAP-EDITOR/)) into `custom_maps/`. It shows up in
-the dashboard's map picker as `custom:<file name>`, or start on it with
-`EVIO_STARTUP_MAP=custom:<file name>`. Players' browsers download it from the game port itself
+The map picker offers three kinds of map:
+
+- **ev.io's official maps**, from `maps.json` (a snapshot of ev.io's map catalogue).
+- **Community maps on the shared list.** Maps uploaded to ev.io after that snapshot are listed in
+  one hosted file,
+  [`extra-maps.json`](https://balancerk.github.io/EV.IO-MAP-EDITOR/maps/extra-maps.json), kept in
+  the [EV.IO-MAP-EDITOR](https://github.com/BalancerK/EV.IO-MAP-EDITOR/tree/main/maps) repo. The
+  server reads it at start-up and every 10 minutes (no restart needed) and keeps the last good copy
+  in `map_cache/`, so it still works offline. To add a map, run that repo's **Add ev.io map**
+  workflow with the map's id. `EVIO_EXTRA_MAPS_URL` points at another list; `off` disables it.
+  Only map files on ev.io's own file store are accepted from the list.
+- **Local files.** Drop any `.evmap` (for example one exported from
+  [EV.IO Map Editor](https://balancerk.github.io/EV.IO-MAP-EDITOR/)) into `custom_maps/`. It shows
+  up in the dashboard's map picker as `custom:<file name>`, or start on it with
+  `EVIO_STARTUP_MAP=custom:<file name>`. Players' browsers download it from the game port itself
 (`GET /maps/<file name>`, the only HTTP path the game port serves), so nothing has to be hosted
 elsewhere. If players reach the server through another address than `127.0.0.1:<port>` (a domain,
 a proxy, a LAN IP), set `EVIO_PUBLIC_HTTP_BASE` to that origin, e.g. `https://game.example.com`.

@@ -12215,7 +12215,10 @@ if (require.main === module) {
     }
   }
 
+  // The hosted extra-maps list is fetched before the startup map is resolved, so a startup map
+  // taken from it is found (the fetch is time-boxed, and the last cached copy is already loaded).
   bpw.ready
+    .then(() => mapLoader.extraMaps.start())
     .then(loadStartupMap)
     .then(() => {
       console.log("[evio-local] extracted physics world ready — starting server");
