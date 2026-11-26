@@ -27,6 +27,7 @@ const https = require('https');
 const bpw = require('./physics_world');
 const phys = require('./physics_extracted');
 const extraMaps = require('./extra_maps');
+const { effectsFromNames } = extraMaps;
 
 const CMS_BASE = 'https://ev.io';
 const CATALOGUE = path.join(__dirname, 'maps.json');
@@ -119,6 +120,10 @@ function baseCatalogue() {
     return url ? CMS_BASE + url : null;
   };
 
+  const termNames = (rel) => {
+    const list = rel && rel.data ? (Array.isArray(rel.data) ? rel.data : [rel.data]) : [];
+    return list.map((d) => { const ent = d && byId.get(d.id); return ent && ent.attributes && ent.attributes.name; });
+  };
   const out = [];
   for (const node of raw.data || []) {
     const a = node.attributes || {};
@@ -138,6 +143,8 @@ function baseCatalogue() {
       // The map's background sound (ambient_tracks/*.ogg), which official sends as
       // roomParams.ambientURL (opcode 25). 23 of the 51 catalogue maps have one.
       ambientUrl: fileUrl(r.field_ambient_track),
+      // The map's weather (opcodes 20-24). 32 of the 51 catalogue maps have at least one.
+      effects: effectsFromNames(termNames(r.field_environment_effect)),
       inRotation: a.field_in_public_rotation !== false,
     });
   }

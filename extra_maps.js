@@ -42,6 +42,22 @@ let _lastError = null;
 let _lastFetched = null;
 let _timer = null;
 
+// A map's "Environment Effect" (taxonomy terms Rain / Snow / Dust / Lightning on the CMS map node)
+// as the five roomParams flags official sends (opcodes 20-24). The client draws the weather and plays
+// its sounds from these: rain loop, lightning strikes + thunder, drifting dust, snow. "Wind" has no
+// term in the catalogue today but is a real flag, so a name of that form is honoured too.
+const EFFECT_FLAGS = ['lightning', 'rain', 'snow', 'dust', 'wind'];
+function effectsFromNames(names) {
+  const out = { lightning: false, rain: false, snow: false, dust: false, wind: false };
+  for (const n of names || []) {
+    const k = String(n || '').trim().toLowerCase();
+    if (EFFECT_FLAGS.includes(k)) out[k] = true;
+  }
+  return out;
+}
+// Only a sound from ev.io's own ambient-track folder is accepted from a hosted list.
+const AMBIENT_URL_RE = /^https:\/\/ev\.io\/sites\/default\/files\/ambient_tracks\/[\w.%-]+\.(ogg|mp3)$/i;
+
 /** Validate a fetched list. Returns catalogue entries (map_loader's shape); bad entries are skipped. */
 function parseList(raw) {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.maps)) throw new Error('not an extra-maps list');
@@ -60,6 +76,8 @@ function parseList(raw) {
       evmapUrl: m.evmapUrl,
       thumbUrl: img(m.thumbUrl),
       largeImageUrl: img(m.largeImageUrl),
+      ambientUrl: typeof m.ambientUrl === 'string' && AMBIENT_URL_RE.test(m.ambientUrl) ? m.ambientUrl : null,
+      effects: effectsFromNames(Array.isArray(m.effects) ? m.effects.slice(0, 5) : []),
       inRotation: false,
       extra: true,
       author: typeof m.author === 'string' ? m.author.slice(0, 40) : null,
@@ -133,5 +151,6 @@ module.exports = {
   version: () => _version,
   status: () => ({ enabled: ENABLED, url: ENABLED ? LIST_URL : null, maps: _entries.length, lastFetched: _lastFetched, lastError: _lastError }),
   refresh, start, stop, parseList,
-  EVMAP_URL_RE, IMAGE_URL_RE, DEFAULT_URL,
+  EVMAP_URL_RE, IMAGE_URL_RE, DEFAULT_URL, AMBIENT_URL_RE,
+  effectsFromNames, EFFECT_FLAGS,
 };
