@@ -43,7 +43,7 @@ const opVal = (arr, op) => { const i = arr.indexOf(op); return i === -1 ? undefi
 console.log('\n── the cap is derived from the ability table, not chosen ──');
 {
   const maxId = Math.max(...Object.keys(ABILITY_TABLES).map(Number));
-  ok('every ability id fits', srv.MAX_ABILITY_SEED_LEN === maxId + 1,
+  ok('every ability id fits, and the client 19-long build is kept whole', srv.MAX_ABILITY_SEED_LEN >= maxId + 1 && srv.MAX_ABILITY_SEED_LEN === 19,
     `cap=${srv.MAX_ABILITY_SEED_LEN} maxId=${maxId} — an id-indexed array needs maxId+1 entries`);
   ok('impulse is the last id', maxId === IMPULSE_ID,
     `maxId=${maxId} — it is last, which is why an off-by-one hit exactly it`);

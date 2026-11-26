@@ -53,7 +53,7 @@ console.log('\n── the bootstrap for a player with no build ──');
   const i93 = flat.findIndex((v, i) => v === 93 && Array.isArray(flat[i + 1]) && flat[i + 2] === 95);
   ok('the attribute block is there', i93 >= 0);
   const at = (op) => { for (let i = i93; i < flat.length - 1; i += 2) if (flat[i] === op) return flat[i + 1]; return undefined; };
-  ok('it still reports the empty build that was sent (opcode 93 = [])', Array.isArray(flat[i93 + 1]) && flat[i93 + 1].length === 0);
+  ok('it reports the default build (opcode 93), as official does for a guest', Array.isArray(flat[i93 + 1]) && flat[i93 + 1].join(',') === DEFAULT_ABILITY_BUILD.join(','), JSON.stringify(flat[i93 + 1]));
   ok('maxJumps (110) = 2, as official', at(110) === 2, String(at(110)));
   ok('jumpPower (111) = 0.77', Math.abs(at(111) - 0.77) < 1e-9, String(at(111)));
 }
