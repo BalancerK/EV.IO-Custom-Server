@@ -317,8 +317,12 @@ console.log('\n── lastHitInfo emission in the player block (opcodes 170-176)
   // No pending hit → no hit-event opcodes in the body.
   const clean = createPlayerStateLike();
   const b1 = []; appendPlayerTickBody(b1, 'p1', clean);
-  ok('no hit → no lastHitInfo opcodes (170-176 absent)',
-    !b1.includes(170) && !b1.includes(171) && !b1.includes(176));
+  // 170-173 always describe the LAST hit and are cleared on respawn, as official does (they are
+  // "set" fields, so the field filter keeps repeats off the wire). Never hit = the cleared values.
+  // 174 (resets the damage-fade counter) and 176 (the shot origin) still appear only on a hit.
+  ok('no hit → cleared last-hit fields ("", 0, null, false), no 174/176',
+    b1[b1.indexOf(170) + 1] === '' && b1[b1.indexOf(171) + 1] === 0 && b1[b1.indexOf(172) + 1] === null
+      && b1[b1.indexOf(173) + 1] === false && !b1.includes(174) && !b1.includes(176));
 
   // Pending hit → opcodes present, in strict ascending order, between 168 and 187.
   const hurt = createPlayerStateLike();
@@ -621,7 +625,9 @@ console.log('\n── grenade costs match client, death sets alive=0 ──');
   const abody = srv.buildTickBody('p1', 7, createPlayerStateLike(), null);
   ok('a living player emits alive=1', abody[abody.indexOf(91) + 1] === 1);
   // respawnTimer1 (129) counts down while dead, -1 while alive.
-  ok('dead player streams respawnTimer1 (129) > 0', dbody[dbody.indexOf(129) + 1] > 0);
+  // 129 is the weapon-switch timer. Official does not count it down while dead; doing so made the
+  // client play the switch-weapon sound once during every death.
+  ok('dead player streams switchWeaponCountdown (129) = -1, not a respawn countdown', dbody[dbody.indexOf(129) + 1] === -1);
   ok('living player streams respawnTimer1 = -1', abody[abody.indexOf(129) + 1] === -1);
   // reloadTimer (130) is streamed (-1 when not reloading).
   ok('reloadTimer (130) is streamed', abody.indexOf(130) !== -1 && abody[abody.indexOf(130) + 1] === -1);
