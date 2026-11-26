@@ -36,6 +36,8 @@
  *   POST /api/preset            {preset} → apply one
  *   GET  /api/maps              map catalogue + which are already cached on disk
  *   POST /api/map               {map} → switch the live map (downloads + converts on first use)
+ *   POST /api/testmap           {name, data} → load an uploaded .evmap (base64) as a TEST map:
+ *                               kept in memory only, never cached, never in the map list
  */
 'use strict';
 
@@ -242,12 +244,30 @@ function startAdminServer(game) {
         const cached = new Set(game.mapLoader.cachedMaps().map((m) => m.nid));
         return json(res, 200, {
           active: game.getStatus().map,
+          testMap: game.mapLoader.activeTestMap(),
           extraMaps: game.mapLoader.extraMaps.status(),
           maps: game.mapLoader.listAllMaps().map((m) => ({
             nid: m.nid, title: m.title, cached: m.custom || cached.has(m.nid), inRotation: m.inRotation, custom: !!m.custom,
             extra: !!m.extra,
           })),
         });
+      }
+      if (req.method === 'POST' && path === '/api/testmap') {
+        // An uploaded .evmap, base64 in JSON (JSON keeps the CSRF rule above intact). The limit
+        // covers the largest test map plus base64's 4/3 growth.
+        const max = game.mapLoader.TEST_MAP_MAX_BYTES;
+        let body;
+        try { body = await readBody(req, Math.ceil(max * 4 / 3) + 4096); } catch (err) {
+          const big = /too large/.test(String(err && err.message));
+          return json(res, big ? 413 : 400, { ok: false, err: big ? `test maps can be at most ${max / 1048576} MB` : String(err && err.message || err) });
+        }
+        if (typeof body.data !== 'string' || !body.data) return json(res, 400, { ok: false, err: 'no file data' });
+        try {
+          const r = await game.loadTestMap(game.getSessions(), Buffer.from(body.data, 'base64'), body.name);
+          return json(res, 200, r);
+        } catch (err) {
+          return json(res, 400, { ok: false, err: String(err && err.message || err) });
+        }
       }
       if (req.method === 'POST' && path === '/api/map') {
         // Switch the live map. Downloads + converts on first use (a few seconds), then cached.
@@ -666,6 +686,15 @@ const PAGE = `<!doctype html>
                 border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--fg);"></select>
         <button id="mapLoad">Load map</button>
       </div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:12px;">
+        <input type="file" id="testMapFile" accept=".evmap" style="flex:1; min-width:220px; font:13px/1.4 inherit;">
+        <button id="testMapLoad">Load test map</button>
+      </div>
+      <p class="muted" style="margin:6px 0 0; font-size:12px;">
+        <b>Test map:</b> upload any .evmap (for example one exported from EV.IO Map Editor) to play it
+        with everyone on the server. It is kept in memory only: not saved, not cached and not added
+        to the map list, and it is gone once you load another map or the server restarts.
+      </p>
       <p class="muted" style="margin:10px 0 0; font-size:12px;">
         Maps are downloaded from ev.io on first use and cached on disk, so nothing large ships with
         the server. <b>&#9679;</b> marks maps already cached (instant). Switching reloads the map for
@@ -1304,9 +1333,36 @@ const PAGE = `<!doctype html>
         sel.appendChild(o);
       });
       if (keep) sel.value = keep;
-      $('mapActive').textContent = d.active ? 'active: ' + d.active : '';
+      $('mapActive').textContent = d.active ? 'active: ' + d.active + (d.testMap ? ' (test map)' : '') : '';
     });
   }
+  $('testMapLoad').onclick = function () {
+    var f = $('testMapFile').files && $('testMapFile').files[0];
+    if (!f) { toast('choose a .evmap file first', true); return; }
+    if (f.size > 32 * 1048576) { toast('test maps can be at most 32 MB', true); return; }
+    $('testMapLoad').disabled = true;
+    $('mapStatus').textContent = 'uploading ' + f.name + ' (' + (f.size / 1048576).toFixed(1) + ' MB)...';
+    var reader = new FileReader();
+    reader.onerror = function () { $('testMapLoad').disabled = false; $('mapStatus').textContent = 'could not read the file'; };
+    reader.onload = function () {
+      var url = String(reader.result);
+      fetch('/api/testmap', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: f.name, data: url.slice(url.indexOf(',') + 1) })
+      }).then(function (r) { return r.json(); }).then(function (r) {
+        $('testMapLoad').disabled = false;
+        if (!r.ok) { $('mapStatus').textContent = 'failed: ' + r.err; toast('test map failed: ' + r.err, true); return; }
+        $('mapStatus').textContent = 'test map ' + r.map + ' loaded — ' + r.tris + ' triangles, ' + r.spawns
+          + ' spawns (generation ' + r.generation + '). Not saved: loading another map removes it.';
+        toast('test map -> ' + r.map);
+        loadMaps();
+      }).catch(function (e) {
+        $('testMapLoad').disabled = false;
+        $('mapStatus').textContent = 'failed: ' + e.message;
+      });
+    };
+    reader.readAsDataURL(f);
+  };
   $('mapLoad').onclick = function () {
     var sel = $('mapSelect');
     var title = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent.slice(2) : '';

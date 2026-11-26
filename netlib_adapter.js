@@ -119,6 +119,43 @@ class NetlibPeerSocket extends EventEmitter {
 const PING_CONTROL_MESSAGE = '\u0000EVIO_PING';
 const PONG_CONTROL_MESSAGE = '\u0000EVIO_PONG';
 
+// ── Test-map transfer ───────────────────────────────────────────────────────────────────
+// A test map (uploaded from the dashboard, kept only in memory — see map_loader.js) has no public
+// URL a WebRTC peer can necessarily reach, so a peer joined over netlib asks for it over the lobby's
+// own reliable channel instead, in windows of chunks it requests one at a time (the asking side
+// paces the transfer, so a slow link never builds up a huge send buffer):
+//   peer -> server   \0EVIO_TM_REQ|<key>|<first chunk>|<count>
+//   server -> peer   \0EVIO_TM|<key>|<index>|<total chunks>|<file size>|<base64 bytes>   (one per chunk)
+//                    \0EVIO_TM_ERR|<key>|<reason>                                          (unknown key)
+// The extension implements the same messages on both sides (background.js), so it can fetch a
+// test map from this server or from another extension host alike. None of these strings ever
+// reaches the game protocol.
+const TEST_MAP_REQ_PREFIX = '\u0000EVIO_TM_REQ|';
+const TEST_MAP_CHUNK_PREFIX = '\u0000EVIO_TM|';
+const TEST_MAP_ERR_PREFIX = '\u0000EVIO_TM_ERR|';
+const TEST_MAP_CHUNK_BYTES = 48 * 1024;   // 64 KiB once base64'd: well under WebRTC's message size limit
+const TEST_MAP_MAX_WINDOW = 32;
+
+/** Reply to one test-map request with the chunks it asked for. `bytesFor(key)` -> Buffer | null. */
+function answerTestMapRequest(data, bytesFor, send) {
+  const [key, fromRaw, countRaw] = data.slice(TEST_MAP_REQ_PREFIX.length).split('|');
+  const buf = /^[0-9a-f]{32}$/.test(key || '') ? bytesFor(key) : null;
+  if (!buf) {
+    send(TEST_MAP_ERR_PREFIX + String(key || '').replace(/[^0-9a-f]/g, '').slice(0, 32) + '|this server is not hosting that test map');
+    return 0;
+  }
+  const total = Math.ceil(buf.length / TEST_MAP_CHUNK_BYTES);
+  const from = Math.max(0, Math.floor(Number(fromRaw) || 0));
+  const count = Math.min(TEST_MAP_MAX_WINDOW, Math.max(1, Math.floor(Number(countRaw) || 1)));
+  let sent = 0;
+  for (let i = from; i < Math.min(total, from + count); i++) {
+    const part = buf.subarray(i * TEST_MAP_CHUNK_BYTES, (i + 1) * TEST_MAP_CHUNK_BYTES);
+    send([TEST_MAP_CHUNK_PREFIX + key, i, total, buf.length, Buffer.from(part).toString('base64')].join('|'));
+    sent++;
+  }
+  return sent;
+}
+
 // ── Network bootstrap ───────────────────────────────────────────────────────────────────
 // Polyfills the WebRTC globals netlib's browser-oriented source calls directly (`new
 // RTCPeerConnection(...)`, `new WebSocket(...)`) with no injection point of their own — see
@@ -167,6 +204,8 @@ async function startNetlibListener(opts) {
     onConnection,
     log = console.log,
     logError = console.error,
+    // Test-map bytes by key (see the test-map transfer note above); defaults to map_loader.js's.
+    testMapBytes = (key) => require('./map_loader').testMapBytes(key),
   } = opts || {};
 
   if (!gameId) throw new Error('startNetlibListener: gameId is required');
@@ -217,6 +256,12 @@ async function startNetlibListener(opts) {
     if (data === PONG_CONTROL_MESSAGE) {
       sock.isAlive = true;
       sock.emit('pong');
+      return;
+    }
+    if (typeof data === 'string' && data.startsWith(TEST_MAP_REQ_PREFIX)) {
+      try {
+        answerTestMapRequest(data, testMapBytes, (msg) => network.send('reliable', peer.id, msg));
+      } catch (err) { logError('[netlib] test map request failed', err); }
       return;
     }
     // isBinary mirrors what `ws` itself reports: true for anything that isn't a plain string.
@@ -293,4 +338,9 @@ module.exports = {
   LOBBY_APP_MARKER,
   PING_CONTROL_MESSAGE,
   PONG_CONTROL_MESSAGE,
+  answerTestMapRequest,
+  TEST_MAP_REQ_PREFIX,
+  TEST_MAP_CHUNK_PREFIX,
+  TEST_MAP_ERR_PREFIX,
+  TEST_MAP_CHUNK_BYTES,
 };

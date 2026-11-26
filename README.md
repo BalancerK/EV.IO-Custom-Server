@@ -143,6 +143,13 @@ The map picker offers three kinds of map:
 (`GET /maps/<file name>`, the only HTTP path the game port serves), so nothing has to be hosted
 elsewhere. If players reach the server through another address than `127.0.0.1:<port>` (a domain,
 a proxy, a LAN IP), set `EVIO_PUBLIC_HTTP_BASE` to that origin, e.g. `https://game.example.com`.
+- **Test maps.** To try a map out with other players without installing it, use **Load test map**
+  in the dashboard's Map tab (or the extension's quick admin) and pick any `.evmap` up to 32 MB. The
+  server keeps it in memory only: it is not written to `map_cache/` or `custom_maps/`, not added
+  to the map list, and not saved as the startup map. It is gone as soon as another map is
+  loaded, or the server restarts. Players download it from `GET /maps/test/<hash>.evmap` on the
+  game port; players who joined over WebRTC through the extension get it in chunks over the
+  lobby's own connection instead, so for them it works without `EVIO_PUBLIC_HTTP_BASE`.
 
 ## The WebRTC (netlib) transport
 

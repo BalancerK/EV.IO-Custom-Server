@@ -239,6 +239,65 @@ async function loadMap(idOrTitleOrUrl) {
   return { ...entry, fromCache, buildMs };
 }
 
+// ── Test maps ────────────────────────────────────────────────────────────────────────────────
+// A .evmap uploaded from the dashboard to try out with other players. It lives ONLY in memory: it
+// is never written to map_cache/ or custom_maps/, never enters the world cache, and never appears
+// in listMaps()/listAllMaps()/findMap(), so it vanishes from the server the moment another map is
+// loaded (or the server restarts). Clients download it from GET /maps/test/<key>.evmap on the game
+// port, or, for players joined over WebRTC, in chunks over the lobby's reliable channel (see
+// netlib_adapter.js) — either way straight from this one in-memory copy.
+const TEST_MAP_MAX_BYTES = 32 * 1024 * 1024;
+const TEST_KEY_RE = /^[0-9a-f]{32}$/;
+let _testMap = null;   // { key, name, buf, size } while a test map is the active map
+
+function testMapUrl(key) { return `${_publicBase}/maps/test/${key}.evmap`; }
+
+// A display name from the uploaded file's name: no extension, no path, printable, short.
+function testMapName(name) {
+  const base = String(name || '').split(/[\\/]/).pop().replace(/\.evmap$/i, '')
+    .replace(/[^\p{L}\p{N} ._'()-]+/gu, ' ').replace(/[\s_]+/g, ' ').trim().slice(0, 48);
+  return base || 'Test map';
+}
+
+/**
+ * Build a test map from uploaded bytes WITHOUT making it active (the caller does that once the
+ * world swap succeeds, via setTestMap). Throws a readable error for anything that cannot be hosted.
+ */
+function buildTestMap(bytes, name) {
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || []);
+  if (!buf.length) throw new Error('the file is empty');
+  if (buf.length > TEST_MAP_MAX_BYTES) {
+    throw new Error(`the file is ${(buf.length / 1048576).toFixed(1)} MB; test maps can be at most ${TEST_MAP_MAX_BYTES / 1048576} MB`);
+  }
+  const key = require('crypto').createHash('sha256').update(buf).digest('hex').slice(0, 32);
+  const title = testMapName(name);
+  let built;
+  try { built = bpw.buildWorldFromEvmapBuffer(buf, title); } catch (err) {
+    throw new Error(`not a readable .evmap file (${err && err.message || err})`);
+  }
+  if (!built || !built.world) throw new Error('not a readable .evmap file');
+  if (!built.spawns || !built.spawns.length) throw new Error(`${title} has no spawn points — add at least one player spawn`);
+  const spawns = bpw.resolveSpawnsToFloor(built.world, built.spawns, title);
+  const map = { nid: `test:${key}`, title, evmapUrl: testMapUrl(key), thumbUrl: null, largeImageUrl: null,
+                inRotation: false, test: true, key };
+  return { map, world: built.world, spawns, teleporters: built.teleporters || [],
+           navmesh: built.navmesh || [], pickupPoints: built.pickupPoints || [],
+           vertices: built.vertices, indices: built.indices, groupIds: built.groupIds,
+           tris: built.indices.length / 3, fromCache: false, buf };
+}
+function setTestMap(loaded) {
+  _testMap = { key: loaded.map.key, name: loaded.map.title, buf: loaded.buf, size: loaded.buf.length };
+}
+function clearTestMap() { _testMap = null; }
+/** The active test map's bytes for `key`, or null (a stale or unknown key gets nothing). */
+function testMapBytes(key) {
+  return (_testMap && typeof key === 'string' && TEST_KEY_RE.test(key) && key === _testMap.key) ? _testMap.buf : null;
+}
+/** Summary of the active test map for the dashboard, or null. */
+function activeTestMap() {
+  return _testMap ? { key: _testMap.key, name: _testMap.name, size: _testMap.size, url: testMapUrl(_testMap.key) } : null;
+}
+
 /** Which maps are already on disk (so the dashboard can show what is instant). */
 function cachedMaps() {
   if (!fs.existsSync(CACHE_DIR)) return [];
@@ -250,4 +309,5 @@ function cachedMaps() {
 function listAllMaps() { return [...listCustomMaps(), ...listMaps()]; }
 
 module.exports = { listMaps, listAllMaps, extraMaps, listCustomMaps, findMap, loadMap, fetchEvmap, cachedMaps,
-  customMapPath, setPublicBase, publicBase, CACHE_DIR, CUSTOM_DIR };
+  customMapPath, setPublicBase, publicBase, CACHE_DIR, CUSTOM_DIR,
+  buildTestMap, setTestMap, clearTestMap, testMapBytes, activeTestMap, testMapUrl, TEST_MAP_MAX_BYTES };
