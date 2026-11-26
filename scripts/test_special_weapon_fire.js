@@ -160,7 +160,7 @@ function mkSession(id, ps, isBot = false) {
     ok('fireWeapon checks isProjectileWeapon before falling back to hitscan',
       /isProjectileWeapon\(nid\)\) fireProjectileShot/.test(src));
     ok('fireWeapon checks weaponPelletCount before falling back to hitscan',
-      /weaponPelletCount\(nid\) > 1\) fireShotgunPellets/.test(src));
+      /weaponPelletCount\(nid\) > 1\)\s*\{?\s*fireShotgunPellets/.test(src));
   }
 
   console.log('\n' + '─'.repeat(60));
