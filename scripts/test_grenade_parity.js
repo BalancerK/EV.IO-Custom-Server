@@ -114,20 +114,23 @@ console.log('\n── throw speed comes from the catalogue too ──');
 console.log('\n── the full trajectory matches the client tick-for-tick ──');
 {
   // The real proof: integrate the same 45-degree throw in the CLIENT's units (u/tick, gravity
-  // 0.048/tick) and in OURS (u/s, dt=0.05) and require them to stay on the same curve. This is what
-  // catches a unit-conversion error in either gravity or speed — each alone can be "plausible"
-  // while the pair is wrong.
+  // 0.048/tick) and through OUR actual projectile step (stepEntity, u/s, dt=0.05), and require them
+  // to stay on the same curve. This catches a unit-conversion error in gravity or speed, and the
+  // ORDER: the client (ProjectileState.tick, 1-7-1 :54504-54576) moves by vec FIRST and applies
+  // gravity after. An earlier version of this test integrated "gravity, then move" on BOTH sides, so
+  // it agreed with a server that was one tick of gravity ahead of official (~2u low after 2s).
   const client = (() => {
     let x = 0, y = 0, vx = 1.5 * Math.SQRT1_2, vy = 1.5 * Math.SQRT1_2;
     const pts = [];
-    for (let t = 0; t < 80; t++) { vy -= 0.048; x += vx; y += vy; pts.push([x, y]); }
+    for (let t = 0; t < 80; t++) { x += vx; y += vy; vy -= 0.048; pts.push([x, y]); }
     return pts;
   })();
   const server = (() => {
-    const S = srv.grenadeSpeed(46), G = srv.grenadeGravity(46), dt = 0.05;
-    let x = 0, y = 0, vx = S * Math.SQRT1_2, vy = S * Math.SQRT1_2;
+    const S = srv.grenadeSpeed(46);
+    const g = { pos: { x: 0, y: 500, z: 0 }, vel: { x: S * Math.SQRT1_2, y: S * Math.SQRT1_2, z: 0 }, type: 46,
+      fuse: 1e6, _bornTick: 0, isStuck: 0, combat: null, armed: false, ray: null };
     const pts = [];
-    for (let t = 0; t < 80; t++) { vy -= G * dt; x += vx * dt; y += vy * dt; pts.push([x, y]); }
+    for (let t = 0; t < 80; t++) { srv.stepEntity(1, g, 0.05, new Map()); pts.push([g.pos.x, g.pos.y - 500]); }
     return pts;
   })();
   let worst = 0;

@@ -135,6 +135,9 @@ function baseCatalogue() {
       // we were sending the thumbnail, which the client scaled up to fill the screen, hence the blurry
       // map picture while loading. Not every map defines one, so callers fall back to the thumbnail.
       largeImageUrl: fileUrl(r.field_large_image),
+      // The map's background sound (ambient_tracks/*.ogg), which official sends as
+      // roomParams.ambientURL (opcode 25). 23 of the 51 catalogue maps have one.
+      ambientUrl: fileUrl(r.field_ambient_track),
       inRotation: a.field_in_public_rotation !== false,
     });
   }

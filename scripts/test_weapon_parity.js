@@ -230,6 +230,36 @@ function mkSession(id, ps) { return { playerId: id, sessionId: id, accepted: tru
       tp.applyProjectileTeleporters({ x: 100, y: 5, z: -4 }, p4, { x: 0, y: 0, z: 1 }, tele, 53, []) === false);
   }
 
+  console.log('\n── rocket acceleration (projectileAcceleration 0.033 u/tick per tick) ──');
+  {
+    // client: move by vec, then vec.setLength(len + 0.033)  (no gravity for the rocket)
+    const client = []; { let x = 0, v = 1.4; for (let t = 0; t < 40; t++) { x += v; v += 0.033; client.push(x); } }
+    const g = { pos: { x: 0, y: 500, z: 0 }, vel: { x: srv.grenadeSpeed(8), y: 0, z: 0 }, type: 8,
+      fuse: 1e6, _bornTick: 1e9, isStuck: 0, combat: null, armed: false, ray: null };
+    const server = [];
+    for (let t = 0; t < 40; t++) { srv.stepEntity(2, g, 0.05, new Map()); server.push(g.pos.x); }
+    const worst = Math.max(...client.map((c, i) => Math.abs(c - server[i])));
+    ok('the rocket\'s flight matches the client tick for tick for 2 s', worst < 1e-6, `worst ${worst.toExponential(2)} u`);
+    ok('it really accelerates (1 s in: ~34u, not 28u)', server[19] > 34 && server[19] < 35, server[19].toFixed(2));
+    ok('and stays level (no gravity)', Math.abs(g.pos.y - 500) < 1e-9);
+    ok('grenades have no acceleration', srv.projectileAcceleration(46) === 0 && srv.projectileAcceleration(283) === 0);
+  }
+
+  console.log('\n── map ambient sound (opcode 25) ──');
+  {
+    const ml = require('../map_loader');
+    const withTrack = ml.listMaps().find((m) => m.ambientUrl);
+    const without = ml.listMaps().find((m) => !m.ambientUrl);
+    ok('the catalogue gives maps their ambient track', !!withTrack && /ambient_tracks\/.+\.ogg$/.test(withTrack.ambientUrl),
+      withTrack && withTrack.ambientUrl);
+    const saved = srv.match.mapUrlOverride;
+    srv.match.mapUrlOverride = withTrack.evmapUrl;
+    ok(`the current map's track is what the server announces (${withTrack.title})`, srv.currentMapAmbient() === withTrack.ambientUrl);
+    srv.match.mapUrlOverride = without.evmapUrl;
+    ok(`a map without one announces "" (${without.title})`, srv.currentMapAmbient() === '');
+    srv.match.mapUrlOverride = saved;
+  }
+
   console.log('\n── stepEntity calls the portal step ──');
   {
     const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'local_ws_server.js'), 'utf8');
