@@ -5489,7 +5489,9 @@ function preTickFire(p, frames) {
   // rare edge case to something a player would actually notice) — the CLIENT correctly refused to
   // play the swing locally while switchTimer was still counting down, but our server had nothing
   // stopping it from confirming the hit anyway.
-  if (_fireHeld && _fireReady && !(p.switchTimer > 0)) {
+  // No shot before the client knows it is alive again (see RESPAWN_FIRE_ACK_TICKS).
+  const _spawnAcked = respawnFireAcked(p, frames);
+  if (_fireHeld && _fireReady && !(p.switchTimer > 0) && _spawnAcked) {
     if (isGun && (p.reloadTicks > 0 || p.gunAmmo <= 0)) return;          // reloading or empty → no shot
     p.fireCooldown = _cdTicks;
     p._firingThisTick = true;
@@ -5521,6 +5523,35 @@ function preTickFire(p, frames) {
   } finally {
     reloadAfterFire(p, held, _reloadDone);
   }
+}
+
+// ── No shot before the client knows it is alive ──────────────────────────────────────────────
+// A player who holds fire through a death keeps sending fire pulses. The server respawned them on
+// server tick R, but the client only learns that from the body of tick R, a round trip later; until
+// then its own prediction still has them dead and its weapon handler refuses to fire. Firing on those
+// ticks anyway made the server shoot (and kick recoil) where the client did not, and from there the
+// client was corrected on every tick of the spray, its recoil never rebuilding until the trigger was
+// released — measured as the source of nearly all remaining pitch/pitchOffset corrections, and of
+// 2-4 degree differences between the server's ray and the client's.
+//
+// Every input packet says which server tick the client had (currentServerTick, kept per sub-frame).
+// A shot is allowed once the frame that fired came from a packet built after the client had seen the
+// respawn: tick >= R + RESPAWN_FIRE_ACK_TICKS (the extra tick: the client applies the new server view
+// on its next predicted tick, and fires from that). Bots never send pulses and are not held.
+let RESPAWN_FIRE_ACK_TICKS = S.define({
+  key: "respawnFireAckTicks", env: "EVIO_RESPAWN_FIRE_ACK_TICKS", type: "int", def: 1, min: -1, max: 10,
+  category: "Combat", label: "Respawn: hold fire until the client has seen it (ticks)",
+  desc: "After a respawn, refuse a real player's shots until the input that fired was built after the "
+      + "client had received the respawn tick + this many ticks. -1 = off (fire immediately).",
+}, (v) => { RESPAWN_FIRE_ACK_TICKS = v; });
+function respawnFireAcked(p, frames) {
+  if (RESPAWN_FIRE_ACK_TICKS < 0 || !p._sendsFirePulse || !Number.isFinite(p._respawnTick)) return true;
+  const k = _firingFrameIndex(frames, true);
+  const per = p._simFrameViewTicks;
+  const vt = (k >= 0 && Array.isArray(per) && Number.isFinite(per[k])) ? per[k] : p._simViewTick;
+  if (!Number.isFinite(vt) || vt < p._respawnTick + RESPAWN_FIRE_ACK_TICKS) return false;
+  p._respawnTick = null;   // acknowledged: back to normal
+  return true;
 }
 
 // The client's handleReloading, in its place in the tick: AFTER the shot (weapon handler tick =
@@ -6458,6 +6489,8 @@ function respawnPlayerNow(p) {
       // from correcting pitch, so nothing ever closed the gap.
       p.pitch = 0;
       if (ps) ps.Qcrzrpr = 0;
+      // The server tick of this respawn: no shot until the client has seen it (respawnFireAcked).
+      p._respawnTick = _live.globalTick || 0;
       // Drop pre-respawn lag-comp history so a shooter can't rewind this player back across the
       // teleport. This was setting the field on the wrong object (playerState, not the session that
       // actually owns _posHistory — see recordPositionSnapshot/positionAtTick) and had been a no-op

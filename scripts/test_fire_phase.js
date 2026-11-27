@@ -193,6 +193,32 @@ function clientTick(s, firing) {
     ok('the client\'s id is not needed', srv.shotSid(p, { sid: '0:someone-else:5' }, 0) === `0:${pid}:101`);
   }
 
+  console.log('\n── after a respawn, no shot until the client has seen it ──');
+  {
+    // The client only learns it is alive from the body of the respawn tick R; until then its own
+    // prediction refuses to fire. Its input says which server tick it had (currentServerTick per
+    // sub-frame): a shot is allowed from a frame built on tick >= R + 1.
+    const p = mk();
+    drive(p, [f([])], 1);
+    p._sendsFirePulse = true;
+    p._respawnTick = 500;                                     // as respawnPlayerNow sets it
+    p._simFrameViewTicks = [499];
+    srv.preTickFire(p, [f([5, 18])]);
+    ok('a fire pulse from before the client saw the respawn does not shoot', p._firingThisTick === false);
+    p._simFrameViewTicks = [500];
+    srv.preTickFire(p, [f([5, 18])]);
+    ok('nor one built on the respawn tick itself (the client applies it a tick later)', p._firingThisTick === false);
+    p._simFrameViewTicks = [501];
+    srv.preTickFire(p, [f([5, 18])]);
+    ok('one built after it does', p._firingThisTick === true);
+    ok('and the hold is cleared once acknowledged', p._respawnTick == null);
+    const bot = mk();
+    drive(bot, [f([])], 1);
+    bot._respawnTick = 500;                                   // bots never send pulses: not held
+    srv.preTickFire(bot, [f([5])]);
+    ok('a bot is not held', bot._firingThisTick === true);
+  }
+
   console.log('\n── releasing fire stops it on the same tick ──');
   {
     const p = mk();
