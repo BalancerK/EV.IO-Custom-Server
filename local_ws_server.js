@@ -6289,6 +6289,13 @@ function respawnPlayerNow(p) {
         ps.Qezh4wz = 9999; ps.Qm2pxgr = 0; ps.Qq1azjr = 0; ps.Qq1azd5 = 0; ps.Qd0yy90 = 0;
       }
       p.pitchOffset = 0;
+      // Respawn looking straight ahead, as official does (PlayerState.respawn: `e.pitch = 0`). The
+      // client comes back level, so a server that kept the pitch the player died with disagreed with
+      // it by exactly that angle for the whole next life — measured with shotCompare as constant
+      // 2.85, 3.38 and 10.0 degree plateaus starting at a respawn. Patches 6b7/6b8 stop the client
+      // from correcting pitch, so nothing ever closed the gap.
+      p.pitch = 0;
+      if (ps) ps.Qcrzrpr = 0;
       // Drop pre-respawn lag-comp history so a shooter can't rewind this player back across the
       // teleport. This was setting the field on the wrong object (playerState, not the session that
       // actually owns _posHistory — see recordPositionSnapshot/positionAtTick) and had been a no-op
@@ -6806,6 +6813,7 @@ function enqueueClientInput(session, decoded) {
     session._lostBy = session._lostBy || {};
     session._lostBy[why] = (session._lostBy[why] || 0) + m;
     session._lostCount = (session._lostCount || 0) + 1;
+    if (RAY_DEBUG && m > 0) console.log(`[evio-look] ${session.sessionId} lost ${m.toFixed(4)} rad of look (${why}) at clientTick ${clientTick}`);
   };
   if (clientTick <= session.lastProcessedClientTick) {
     // LATE — this tick has already been simulated. Discarding the sub-frames loses their look
