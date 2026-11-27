@@ -73,5 +73,26 @@ console.log('\n── an input that arrives after a newer one ──');
   ok('an input for a tick already simulated does not enter the queue', q.length === before);
 }
 
+console.log('\n── a medal / hit confirmation survives lost packets ──');
+{
+  const srv = require('../local_ws_server');
+  const S = require('../settings');
+  const ps = srv.createPlayerSimState({ x: 0, y: 2, z: 0, yaw: 0 }, 'pm');
+  ps._ownerSid = 'pm';
+  srv._pendingMedals.length = 0;
+  srv.awardMedal(ps, Object.keys(srv.MEDAL_KEY)[0], 100);
+  const sessions = new Map([['pm', { playerId: 'pm', sessionId: 'pm', accepted: true, playerState: ps }]]);
+  const seen = [];
+  for (let t = 0; t < 6; t++) {
+    const body = srv.buildTickBody('pm', 7000 + t, ps, sessions);
+    const i = body.indexOf(74);
+    seen.push(i >= 0 ? `${body[i + 1]}@${body[body.indexOf(70, i) + 1]}` : '-');
+    srv._ageEvents(srv._pendingMedals);   // what the tick loop does after each broadcast
+  }
+  const n = S.get('eventRepeatTicks');
+  ok(`sent in ${n} consecutive packets with eventAge 0..${n - 1}, same id (${seen.join(' ')})`,
+    seen.slice(0, n).every((s, k) => s.endsWith('@' + k) && s.split('@')[0] === seen[0].split('@')[0]) && seen.slice(n).every((s) => s === '-'));
+}
+
 console.log(`\n${'─'.repeat(60)}\n${pass + fail} assertions: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
