@@ -1644,6 +1644,217 @@ const WEAPON_PROJECTILE_SPEED = _weaponDataMap("projectileSpeed");
 const WEAPON_PELLET_COUNT     = _weaponDataMap("countProjectiles");
 const WEAPON_SPRAY_SPREAD     = _weaponDataMap("sprayPatternSpread");
 const WEAPON_SPRAY_SPREAD_ADS = _weaponDataMap("sprayPatternSpreadADS");
+
+// ── Shot comparison (anticheat groundwork, step 1: MEASURE ONLY) ─────────────────────────────
+// Hit detection trusts the client's #SHOT# ray. The official server trusts nothing: the client sends
+// only inputs and the server builds every shot itself. To get there, the server's own ray has to
+// match the client's. This measures how well it does, on every single-ray hitscan shot that arrives
+// with a client ray, WITHOUT changing what the shot does (the client ray is still the one used).
+//
+// Two server-built candidates are scored against the client's ray:
+//   A "current"  what shotRay() builds today without a client ray: the post-tick eye, the post-tick
+//                yaw/pitch, no spread.
+//   B "client"   the client's own formula (1-7-1 bundle, GameplayController.onFrame ->
+//                LocalWeaponHandler.onFrame -> getBulletsForFiredWeapon):
+//                  c      = subtickTime of the frame that fired (the one carrying fire pulse 18)
+//                  origin = lerp(prevPos, pos, c) + eye height, from the state BEFORE this tick
+//                  yaw    = yaw + the look deltas of this tick's frames up to the firing one
+//                  pitch  = pitch + c * pitchOffset + the same for look, clamped to ±π/2
+//                  dir    = rotate(normalize(spread * randOnDisc(String(10 * tick)), -1), yaw, pitch)
+//                  spread = getSpread(ticksSinceLastShot, ticksSinceLastMove, grounded, zooming)
+//                The randomness is a hash of the fire tick, so the server can reproduce it exactly.
+// B's tick is taken from the client's own shot id ("pellet:playerId:tick") here, to test the
+// formula; how that tick relates to the server's clientTick is recorded for step 2.
+let SHOT_COMPARE = S.define({
+  key: "shotCompare", env: "EVIO_SHOT_COMPARE", type: "bool", def: false,
+  category: "Debug", label: "Compare server-built shots with client rays",
+  desc: "Measurement only: on every hitscan shot, build the ray the server would fire itself and "
+      + "score it against the client's #SHOT# ray (origin, angle, same victim). Results in "
+      + "/api/status shotCompare and a console summary every 100 shots.",
+}, (v) => { SHOT_COMPARE = v; });
+
+const WEAPON_SPREAD_MIN = _weaponDataMap("spreadMin");
+const WEAPON_SPREAD_MAX = _weaponDataMap("spreadMax");
+const WEAPON_ZOOM_SPREAD_MOD = _weaponDataMap("zoomSpreadMod");
+const WEAPON_SPREAD_MIN_ZOOM = _weaponDataMap("spreadMinZoom");
+
+// The client's hashString / randOnDisc, verbatim (bundle Fd). Float arithmetic, not integer: copied
+// exactly so the same string gives the same number.
+function clientHashString(e) {
+  let t = 4022871197;
+  for (let a = 0; a < e.length; a++) {
+    let n = 0.02519603282416938 * (t += e.charCodeAt(a));
+    n -= t = n >>> 0; t = (n *= t) >>> 0; t += 4294967296 * (n -= t);
+  }
+  return 2.3283064365386963e-10 * (t >>> 0);
+}
+function clientRandOnDisc(seed) {
+  const n = clientHashString(seed), i = clientHashString("0" + seed), r = clientHashString("1" + seed);
+  const o = 2 * Math.PI * n, s = i + r, l = s > 1 ? 2 - s : s;
+  return { x: l * Math.cos(o), y: l * Math.sin(o) };
+}
+// The client's getSpread (fb.getSpread) for a tier-0 weapon (battle-royale tiers are not used here).
+// st = { tsls, tslm, grounded, zooming }; timeScale is 1 on this server.
+function clientGetSpread(nid, st, timeScale = 1) {
+  const max = WEAPON_SPREAD_MAX[nid];
+  let i = 0;
+  if (Number.isFinite(max) && max > 0) {
+    const zm = WEAPON_ZOOM_SPREAD_MOD[nid];
+    const o = st.zooming && Number.isFinite(zm) ? zm : 1;
+    const mn = WEAPON_SPREAD_MIN[nid];
+    i = (Number.isFinite(mn) ? mn : 1) * o;
+    const l = st.tslm * timeScale, s = st.tsls * timeScale;
+    if (s <= 10) i = Math.max(i, o * max * (9 - s) / 10);
+    if (l >= 1) i = Math.max(i, Math.min(1.33 * o, 1) * max * 0.7 * (9 - l) / 10);
+    if (!st.grounded && !st.zooming) i = Math.max(1.5 * max * Math.min(1.66 * o, 1), 0.05);
+    const mz = WEAPON_SPREAD_MIN_ZOOM[nid];
+    i = Math.max(i, Number.isFinite(mz) ? mz : 1);
+  }
+  return i;
+}
+function clientShotDir(nid, st, tick, yaw, pitch) {
+  const u = clientGetSpread(nid, st);
+  const c = clientRandOnDisc(String(10 * tick));
+  const x = u * c.x, y = u * c.y, z = -1, l = Math.hypot(x, y, z);
+  return _rotateByYawPitch(x / l, y / l, z / l, yaw, pitch);
+}
+
+// The frame that fired: the first carrying fire pulse 18 (held or just pressed); for a client that
+// never sends 18, the first holding 5. Returns its index, or -1.
+function _firingFrameIndex(frames, pulse) {
+  if (!Array.isArray(frames)) return -1;
+  for (let k = 0; k < frames.length; k++) {
+    const packed = Array.isArray(frames[k]) && Array.isArray(frames[k][1]) ? frames[k][1] : null;
+    if (!packed) continue;
+    const has = (list, a) => Array.isArray(list) && _boundedActions(list).indexOf(a) !== -1;
+    if (pulse ? (has(packed[0], 18) || has(packed[1], 18)) : has(packed[0], 5)) return k;
+  }
+  return -1;
+}
+
+// Called from preTickFire when a shot is decided: everything candidate B needs, taken BEFORE this
+// tick's physics runs (the client fires from the state of the tick it last simulated).
+function captureShotPre(p, frames) {
+  const ps = p._ps;
+  if (!ps || !ps.Qdsukt4) { p._shotPre = null; return; }
+  const k = _firingFrameIndex(frames, !!p._sendsFirePulse);
+  let lookX = 0, lookY = 0, cum = 0, c = 1;
+  if (k >= 0) {
+    for (let j = 0; j <= k; j++) {
+      const f = frames[j];
+      const d = Array.isArray(f) && Array.isArray(f[1]) ? f[1][3] : null;
+      if (Array.isArray(d)) { lookX += Number(d[0]) || 0; lookY += Number(d[1]) || 0; }
+      cum += Number(f && f[0]) || 0;
+    }
+    const c0 = Number(frames[k][0]);
+    c = Number.isFinite(c0) ? c0 : 1;
+  }
+  const prev = p._prevTickPos;
+  p._shotPre = {
+    frameIndex: k, frameCount: Array.isArray(frames) ? frames.length : 0, c, cum,
+    pos: { x: ps.Qdsukt4.x, y: ps.Qdsukt4.y, z: ps.Qdsukt4.z },
+    prevPos: prev ? { x: prev.x, y: prev.y, z: prev.z } : null,
+    yaw: ps.Qqg4go0, pitch: ps.Qcrzrpr, pitchOffset: ps.Qd0yy90 || 0,
+    crouching: !!ps.Q2r3ysn, scale: (typeof ps.scale === "number" && ps.scale > 0) ? ps.scale : 1,
+    lookX: lookX * LOOK_SCALE, lookY: lookY * LOOK_SCALE,
+    spreadState: { tsls: ps.Qezh4wz, tslm: ps.Qezdgca, grounded: !!ps.Q9t2fit, zooming: !!ps.Qgk2mcg },
+    clientTick: p._simClientTick,
+  };
+}
+
+function _candidateB(shooter, pre, tick) {
+  const c = pre.c;
+  const base = pre.prevPos || pre.pos;
+  const feet = { x: base.x + (pre.pos.x - base.x) * c, y: base.y + (pre.pos.y - base.y) * c, z: base.z + (pre.pos.z - base.z) * c };
+  const eye = { x: feet.x, y: feet.y + (pre.crouching ? CROUCH_EYE_Y : STAND_EYE_Y) * pre.scale, z: feet.z };
+  const yaw = pre.yaw + pre.lookX;
+  const pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pre.pitch + c * pre.pitchOffset + pre.lookY));
+  const nid = shooter.equippedWeaponId;
+  const dir = tick != null ? clientShotDir(nid, pre.spreadState, tick, yaw, pitch) : phys.aimDirection(yaw, pitch);
+  const dirNoSpread = _rotateByYawPitch(0, 0, -1, yaw, pitch);
+  return { eye, dir, dirNoSpread, yaw, pitch, spread: clientGetSpread(nid, pre.spreadState) };
+}
+
+const _angleDeg = (a, b) => {
+  const la = Math.hypot(a.x, a.y, a.z) || 1, lb = Math.hypot(b.x, b.y, b.z) || 1;
+  const d = (a.x * b.x + a.y * b.y + a.z * b.z) / (la * lb);
+  return Math.acos(Math.max(-1, Math.min(1, d))) * 180 / Math.PI;
+};
+const _dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+// Where along prev->pos the client's origin sits (the c it really used), for comparison with ours.
+function _fitAlpha(pre, clientEye) {
+  if (!pre.prevPos) return null;
+  const eyeY = (pre.crouching ? CROUCH_EYE_Y : STAND_EYE_Y) * pre.scale;
+  const ax = pre.prevPos.x, ay = pre.prevPos.y + eyeY, az = pre.prevPos.z;
+  const bx = pre.pos.x - pre.prevPos.x, by = pre.pos.y - pre.prevPos.y, bz = pre.pos.z - pre.prevPos.z;
+  const L2 = bx * bx + by * by + bz * bz;
+  if (L2 < 1e-6) return null;   // standing still: any c fits
+  return ((clientEye.x - ax) * bx + (clientEye.y - ay) * by + (clientEye.z - az) * bz) / L2;
+}
+
+const SHOT_COMPARE_KEEP = 3000;
+const _shotCompare = { samples: [], total: 0 };
+function recordShotCompare(shooter, clientRay, candA, candB, hits, pre, sidInfo) {
+  const cEye = { x: clientRay.ox, y: clientRay.oy, z: clientRay.oz };
+  const cDir = { x: clientRay.dx, y: clientRay.dy, z: clientRay.dz };
+  const cl = _yawPitchOf(cDir);
+  const victim = (h) => (h && h.victimSid != null ? `${h.victimSid}${h.headshot ? "h" : ""}` : "-");
+  const s = {
+    wpn: shooter.equippedWeaponId,
+    oA: _dist(candA.eye, cEye), oB: _dist(candB.eye, cEye),
+    aA: _angleDeg(candA.dir, cDir), aB: _angleDeg(candB.dir, cDir), aBns: _angleDeg(candB.dirNoSpread, cDir),
+    dYawB: Math.atan2(Math.sin(cl.yaw - candB.yaw), Math.cos(cl.yaw - candB.yaw)), dPitchB: cl.pitch - candB.pitch,
+    pitchOffset: pre.pitchOffset, tsls: pre.spreadState.tsls, lookY: pre.lookY,
+    spread: candB.spread,
+    c: pre.c, cum: pre.cum, fitC: _fitAlpha(pre, cEye), frame: pre.frameIndex, frames: pre.frameCount,
+    tickRel: sidInfo && Number.isFinite(sidInfo.tick) && Number.isFinite(pre.clientTick) ? sidInfo.tick - pre.clientTick : null,
+    pidMatch: sidInfo ? String(sidInfo.pid) === String(shooter._ps && shooter._ps.Q7q6byi) : null,
+    hit: victim(hits.client), hitA: victim(hits.A), hitB: victim(hits.B),
+  };
+  _shotCompare.samples.push(s);
+  if (_shotCompare.samples.length > SHOT_COMPARE_KEEP) _shotCompare.samples.splice(0, _shotCompare.samples.length - SHOT_COMPARE_KEEP);
+  _shotCompare.total++;
+  if (RAY_DEBUG) {
+    console.log(`[evio-shotcmp] wpn=${s.wpn} hit=${s.hit} A:${s.hitA} o=${s.oA.toFixed(3)} a=${s.aA.toFixed(3)}° `
+      + `B:${s.hitB} o=${s.oB.toFixed(3)} a=${s.aB.toFixed(3)}° (no-spread ${s.aBns.toFixed(3)}°) `
+      + `c=${s.c.toFixed(3)} fitC=${s.fitC == null ? "-" : s.fitC.toFixed(3)} tickRel=${s.tickRel} pid=${s.pidMatch} `
+      + `dPitchB=${(s.dPitchB * 180 / Math.PI).toFixed(3)}° dYawB=${(s.dYawB * 180 / Math.PI).toFixed(3)}° pOff=${s.pitchOffset.toFixed(4)} `
+      + `tsls=${s.tsls} lookY=${s.lookY.toFixed(4)} frame=${s.frame}/${s.frames}`);
+  }
+  if (_shotCompare.total % 100 === 0) console.log("[evio-shotcmp] " + JSON.stringify(shotCompareSummary()));
+}
+
+function shotCompareSummary() {
+  const all = _shotCompare.samples;
+  const q = (arr, p) => {
+    const v = arr.filter(Number.isFinite).sort((a, b) => a - b);
+    return v.length ? +v[Math.min(v.length - 1, Math.floor(p * v.length))].toFixed(4) : null;
+  };
+  const stat = (rows, k) => ({ med: q(rows.map((r) => r[k]), 0.5), p90: q(rows.map((r) => r[k]), 0.9), max: q(rows.map((r) => r[k]), 1) });
+  const count = (rows, f) => rows.filter(f).length;
+  const byWeapon = {};
+  for (const r of all) (byWeapon[r.wpn] = byWeapon[r.wpn] || []).push(r);
+  const out = { shots: _shotCompare.total, kept: all.length, weapons: {} };
+  for (const [w, rows] of Object.entries(byWeapon)) {
+    const hitRows = rows.filter((r) => r.hit !== "-" || r.hitA !== "-" || r.hitB !== "-");
+    out.weapons[w] = {
+      n: rows.length,
+      originA: stat(rows, "oA"), originB: stat(rows, "oB"),
+      angleA: stat(rows, "aA"), angleB: stat(rows, "aB"), angleBNoSpread: stat(rows, "aBns"),
+      yawErrB: stat(rows.map((r) => ({ v: Math.abs(r.dYawB) * 180 / Math.PI })), "v"),
+      pitchErrB: stat(rows.map((r) => ({ v: Math.abs(r.dPitchB) * 180 / Math.PI })), "v"),
+      // Shots where any of the three rays touched a player: does the server's ray agree with the client's?
+      sameVictimA: hitRows.length ? `${count(hitRows, (r) => r.hitA === r.hit)}/${hitRows.length}` : "0/0",
+      sameVictimB: hitRows.length ? `${count(hitRows, (r) => r.hitB === r.hit)}/${hitRows.length}` : "0/0",
+      tickRel: Object.fromEntries([...new Set(rows.map((r) => r.tickRel))].map((t) => [t, count(rows, (r) => r.tickRel === t)])),
+      playerIdMatches: `${count(rows, (r) => r.pidMatch === true)}/${rows.length}`,
+      cFitErr: stat(rows.filter((r) => r.fitC != null).map((r) => ({ v: Math.abs(r.fitC - r.c) })), "v"),
+      cumFitErr: stat(rows.filter((r) => r.fitC != null).map((r) => ({ v: Math.abs(r.fitC - r.cum) })), "v"),
+    };
+  }
+  return out;
+}
+
 function isProjectileWeapon(nid) {
   const s = WEAPON_PROJECTILE_SPEED[nid];
   return Number.isFinite(s) && s > 0;
@@ -4733,8 +4944,29 @@ function fireHitscan(shooter, sessions, clientRay) {
   const ps = shooter._ps;
   if (!ps || !ps.Qdsukt4 || !bpw.world) return;
   const { eye, dir } = shotRay(shooter, clientRay);
-  const hit = withLagComp(shooter, sessions, () =>
-    phys.hitscanPlayers(bpw.world, eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, ps.Q7q6byi));
+  // Shot comparison (measurement only, see SHOT_COMPARE): the rays the server would build itself,
+  // tested against the same rewound targets. The shot still uses the client's ray.
+  const pre = SHOT_COMPARE && clientRay ? shooter._shotPre : null;
+  let cmp = null;
+  if (pre) {
+    const parts = typeof clientRay.sid === "string" ? clientRay.sid.split(":") : [];
+    const sidInfo = parts.length >= 3 ? { tick: Number(parts[parts.length - 1]), pid: parts.slice(1, -1).join(":") } : null;
+    cmp = { pre, sidInfo, A: shotRay(shooter, null), B: _candidateB(shooter, pre, sidInfo ? sidInfo.tick : null) };
+  }
+  const hits = {};
+  const hit = withLagComp(shooter, sessions, () => {
+    const h = phys.hitscanPlayers(bpw.world, eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, ps.Q7q6byi);
+    if (cmp) {
+      hits.client = h;
+      hits.A = phys.hitscanPlayers(bpw.world, cmp.A.eye.x, cmp.A.eye.y, cmp.A.eye.z, cmp.A.dir.x, cmp.A.dir.y, cmp.A.dir.z, ps.Q7q6byi);
+      hits.B = phys.hitscanPlayers(bpw.world, cmp.B.eye.x, cmp.B.eye.y, cmp.B.eye.z, cmp.B.dir.x, cmp.B.dir.y, cmp.B.dir.z, ps.Q7q6byi);
+    }
+    return h;
+  });
+  if (cmp) {
+    try { recordShotCompare(shooter, clientRay, cmp.A, cmp.B, hits, cmp.pre, cmp.sidInfo); }
+    catch (e) { console.warn("[evio-shotcmp] " + ((e && e.message) || e)); }
+  }
   const bd = WEAPON_DMG[shooter.equippedWeaponId];
   spawnBullet(shooter._ownerSid, eye, dir, (bd > 0 ? bd * DMG_GLOBAL_MULT * LOBBY_DAMAGE_MULT : 0), shooter.equippedWeaponId);
   applyHit(shooter, sessions, hit, eye, clientRay && clientRay.sid);
@@ -5149,6 +5381,7 @@ function preTickFire(p, frames) {
       }
     }
     p._fireAlpha = SUBFRAME_SHOT ? firingAlphaFromFrames(frames) : 1;   // render alpha of the firing sub-frame
+    if (SHOT_COMPARE) captureShotPre(p, frames); else p._shotPre = null;
     // Recoil arm + actionTickCounter reset are NOT done here — they run in the correct client order
     // inside _integrateWithExtractedPhysics (arm uses the PREV tick's atc==0; reset is AFTER l()).
   }
@@ -6875,6 +7108,7 @@ function processBufferedTick(session, globalTick, sessions) {
       // sub-frames carry the render alpha (frameDeltaTime) the client fired from.
       {
         const _t0 = Date.now();
+        playerState._simClientTick = batch.clientTick;
         preTickFire(playerState, batch.frames);
         _addSimSubTiming("preTickFire", Date.now() - _t0);
       }
@@ -10543,6 +10777,7 @@ function getStatus() {
     // "down" during a normal deploy's drain window.
     draining: !!_live.draining,
     tickErrors: _live.tickErrors || 0,
+    shotCompare: SHOT_COMPARE ? shotCompareSummary() : null,
     // Tick-budget health. tickOverruns rising is the earliest warning of overload — it climbs before
     // the measured tickRate visibly falls, because a few slow ticks are absorbed by the scheduler.
     tickOverruns: _live.tickOverruns || 0,
@@ -13131,6 +13366,11 @@ module.exports = {
   weaponClip,
   weaponReloadTicks,
   preTickFire,
+  clientHashString,
+  clientRandOnDisc,
+  clientGetSpread,
+  clientShotDir,
+  shotCompareSummary,
   buildActiveEntityBlock,
   activeEntities,
   clearAllEntities,
