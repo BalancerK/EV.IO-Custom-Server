@@ -137,6 +137,45 @@ function clientTick(s, firing) {
     ok(`a bot (5 only, never 18) still fires on the cooldown (${botFired.join(',')})`, botFired.join(',') === '1,3,5');
   }
 
+  console.log('\n── a reload starts on the tick the magazine empties, like the client ──');
+  {
+    // The client's weapon tick is applyFiredWeaponStateChange THEN handleReloading: the shot that
+    // empties the mag starts the reload on that same tick, and the refill lands when the countdown
+    // reaches 0, after that tick's fire gate. Running the reload before the shot put both ends a tick
+    // late — and zoom (which reads the reload timer) with them.
+    const p = mk();
+    p.gunAmmo = 1;
+    const pulse = (t) => drive(p, [f([5, 18])], t);
+    pulse(1);
+    ok('the last round fires', p._firingThisTick === true);
+    ok('the reload starts on that same tick', p.reloadTicks > 0 && p.gunAmmo === 0, `reloadTicks ${p.reloadTicks}`);
+    const R = p.reloadTicks;
+    let refillTick = null, firedOnRefill = false, firstShotAfter = null;
+    for (let t = 2; t <= R + 4; t++) {
+      pulse(t);
+      if (refillTick === null && p.gunAmmo > 0) { refillTick = t; firedOnRefill = p._firingThisTick; }
+      else if (refillTick !== null && firstShotAfter === null && p._firingThisTick) firstShotAfter = t;
+    }
+    ok(`the magazine refills ${R} ticks after the reload started (tick ${1 + R})`, refillTick === 1 + R, `refilled on ${refillTick}`);
+    ok('no shot on the refill tick (the fire gate saw an empty magazine)', firedOnRefill === false);
+    ok('firing resumes on the next tick', firstShotAfter === refillTick + 1, `first shot ${firstShotAfter}`);
+  }
+
+  console.log('\n── recoil is armed on the firing tick, with that tick\'s zoom ──');
+  {
+    // Aimed shot (zoom held) on tick 1, zoom released on tick 2. The client arms on the shot's own
+    // tick, so the kick uses the ADS factor 0.6; arming at the start of tick 2 used tick 2's zoom (off).
+    const p = mk();
+    drive(p, [f([6])], 1);                       // aim first, so the zoom is up when the shot fires
+    drive(p, [f([5, 6, 18])], 2);
+    const armedMax = p._ps.Qq1azd5;
+    ok('the recoil magnitudes are armed on the firing tick itself', armedMax > 0, String(armedMax));
+    const want = 0.5 * KNOCKBACK_MAX * KNOCKBACK * 0.6;   // jr = 0 for a first shot
+    ok('with the ADS factor of the tick it fired on', Math.abs(armedMax - want) < 1e-9, `${armedMax} vs ${want}`);
+    drive(p, [f([])], 3);                        // zoom released
+    ok('and releasing zoom afterwards does not change it', Math.abs(p._ps.Qq1azd5 - want) < 1e-9, String(p._ps.Qq1azd5));
+  }
+
   console.log('\n── releasing fire stops it on the same tick ──');
   {
     const p = mk();
