@@ -8019,9 +8019,20 @@ let WIRE_FLOAT32 = S.define({
   desc: "Send other players' position, velocity and view angles at float32 precision (~0.00002 units) "
       + "in 5 bytes instead of 9. Your own player is never reduced. Off = float64 everywhere.",
 }, (v) => { WIRE_FLOAT32 = v; });
+// Diagnostic: where a broadcast spends its time (ms per tick, all recipients): building bodies,
+// encoding them, and handing them to the transport (safeSend). Printed with every TICK OVERRUN, next
+// to the phase breakdown, to tell a slow build from a send that blocks.
+const _bcTimings = { build: 0, encode: 0, send: 0, sends: 0, maxSend: 0 };
+function _resetBcTimings() { _bcTimings.build = 0; _bcTimings.encode = 0; _bcTimings.send = 0; _bcTimings.sends = 0; _bcTimings.maxSend = 0; }
+
 function sendState(ws, state) {
+  const _te = process.hrtime.bigint();
   const encoded = WIRE_FLOAT32 ? encodeWire(state) : encode(state);
+  _bcTimings.encode += Number(process.hrtime.bigint() - _te) / 1e6;
+  const _tx = process.hrtime.bigint();
   safeSend(ws, encoded, { binary: true });
+  const _txMs = Number(process.hrtime.bigint() - _tx) / 1e6;
+  _bcTimings.sends++; if (_txMs > _bcTimings.maxSend) _bcTimings.maxSend = _txMs;
   return encoded.byteLength;
 }
 
@@ -11478,12 +11489,14 @@ function startServer() {
       // of the thinning above, since a per-phase breakdown is exactly the thing worth NOT losing.
       console.warn(`[evio-local] TICK OVERRUN #${_live.tickOverruns} breakdown: `
         + `${JSON.stringify(_tickTimings)} sim: ${JSON.stringify(_simSubTimings)} `
-        + `grenade: ${JSON.stringify(_grenadeSubTimings)}`);
+        + `grenade: ${JSON.stringify(_grenadeSubTimings)} `
+        + `broadcast: {"build":${_bcTimings.build.toFixed(1)},"encode":${_bcTimings.encode.toFixed(1)},"send":${_bcTimings.send.toFixed(1)},"sends":${_bcTimings.sends},"maxSend":${_bcTimings.maxSend.toFixed(1)}}`);
     }
   }
 
   function runGlobalTickInner() {
     _tickTimings = {};
+    _resetBcTimings();
     _resetSimSubTimings();
     _resetGrenadeSubTimings();
     globalTick++;
@@ -11758,7 +11771,9 @@ function startServer() {
           + `map generation ${match.mapGeneration})`);
       } else {
         deltaCtx = makeDeltaContext(s, globalTick);
+        const _tb = process.hrtime.bigint();
         body = buildTickBody(s.playerId, globalTick, s.playerState, sessions, deltaCtx);
+        _bcTimings.build += Number(process.hrtime.bigint() - _tb) / 1e6;
       }
 
       // ── Flush queued peer bootstrap deltas + departures ───────────────────
@@ -11904,7 +11919,9 @@ function startServer() {
       // The write itself can no longer throw (safeSend catches), but encode() still can — msgpack
       // rejects values it cannot represent. This closes the try opened before the body build.
       {
+        const _ts = process.hrtime.bigint();
         totalBytes += sendState(s.ws, [computeSyncValue(s), echoTick, body]);
+        _bcTimings.send += Number(process.hrtime.bigint() - _ts) / 1e6;
         commitDeltaContext(deltaCtx);   // only now is it what this recipient was sent
         recipients++;
         // Spend one credit per packet, so sends can never outpace the client ticks that funded them.

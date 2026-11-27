@@ -23,6 +23,7 @@
 // data that is NOT a msgpack array on this transport, re-verify this note still holds.
 
 const EventEmitter = require('events');
+let RTC_IMPL = null;   // set by ensureWebRtcPolyfill
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
@@ -177,12 +178,68 @@ function answerTestMapRequest(data, bytesFor, send) {
 // global WebSocket (used for the signaling connection itself), so only RTCPeerConnection needs
 // a real polyfill, via @roamhq/wrtc (the same package the vendored library's own test suite
 // uses for exactly this — see netlib-vendor/README.md's "Star topology" section).
+// Which WebRTC implementation backs netlib's browser-style RTCPeerConnection.
+//
+// node-datachannel (libdatachannel) is the default. @roamhq/wrtc's RTCDataChannel.send() is a
+// synchronous call that waits on the library's own network thread, and with real internet peers on
+// the Linux VPS that wait was 47-78 ms PER SEND (measured: broadcast "maxSend" on every TICK OVERRUN,
+// while the CPU sat 94% idle) — the server froze for whole ticks and both players felt it as lag at
+// 70-80 ms ping. libdatachannel queues the message and returns. EVIO_RTC_IMPL=wrtc goes back; if
+// node-datachannel cannot load (no prebuilt binary for the platform) wrtc is used instead.
+// node-datachannel's browser-style RTCPeerConnection (0.33.x) differs from a browser in three ways
+// netlib depends on, each of which stopped peers from ever connecting (two netlib peers on the VPS
+// signaling: "connecting" forever):
+//  1. it never fires 'negotiationneeded' — the flag that gates it starts as false, not null — and
+//     netlib only sends its offer from that event;
+//  2. remote ICE candidates that arrive before the remote description throw ("Got a remote candidate
+//     without remote description") instead of being held, as browsers do;
+//  3. restartIce() throws "Not implemented" (netlib calls it when a connection drops).
+// This subclass restores the browser behaviour for all three; with it, the same two peers connect
+// in ~0.2 s and both channels deliver in both directions.
+function ndcCompatPeerConnection(Base) {
+  return class extends Base {
+    constructor(config) {
+      super(config);
+      this._evioHasRemote = false;
+      this._evioEarlyCandidates = [];
+      this._evioAnnounced = false;
+    }
+    createDataChannel(label, opts) {
+      const ch = super.createDataChannel(label, opts);
+      if (!this._evioAnnounced) {
+        this._evioAnnounced = true;
+        setTimeout(() => { try { this.dispatchEvent(new Event('negotiationneeded')); } catch (_) {} }, 0);
+      }
+      return ch;
+    }
+    async setRemoteDescription(description) {
+      const r = await super.setRemoteDescription(description);
+      this._evioHasRemote = true;
+      const early = this._evioEarlyCandidates;
+      this._evioEarlyCandidates = [];
+      for (const c of early) { try { await super.addIceCandidate(c); } catch (_) {} }
+      return r;
+    }
+    async addIceCandidate(candidate) {
+      if (!this._evioHasRemote) { this._evioEarlyCandidates.push(candidate); return; }
+      return super.addIceCandidate(candidate);
+    }
+    restartIce() { /* not implemented by node-datachannel; the connection's own ICE keeps going */ }
+  };
+}
+
 function ensureWebRtcPolyfill() {
   if (!globalThis.RTCPeerConnection) {
-    const wrtc = require('@roamhq/wrtc');
-    globalThis.RTCPeerConnection = wrtc.RTCPeerConnection;
-    globalThis.RTCSessionDescription = wrtc.RTCSessionDescription;
-    globalThis.RTCIceCandidate = wrtc.RTCIceCandidate;
+    let impl = null;
+    if (process.env.EVIO_RTC_IMPL !== 'wrtc') {
+      try { impl = require('node-datachannel/polyfill'); RTC_IMPL = 'node-datachannel'; }
+      catch (err) { console.warn(`[netlib] node-datachannel unavailable (${err && err.message}); using @roamhq/wrtc`); }
+    }
+    if (!impl) { impl = require('@roamhq/wrtc'); RTC_IMPL = 'wrtc'; }
+    globalThis.RTCPeerConnection = RTC_IMPL === 'node-datachannel' ? ndcCompatPeerConnection(impl.RTCPeerConnection) : impl.RTCPeerConnection;
+    globalThis.RTCSessionDescription = impl.RTCSessionDescription;
+    globalThis.RTCIceCandidate = impl.RTCIceCandidate;
+    console.log(`[netlib] WebRTC implementation: ${RTC_IMPL}`);
   }
   // netlib's signaling connection does a plain browser-style `new WebSocket(url)` (see
   // lib/signaling.ts's connect()). Node only ships a global WebSocket from v22 — found live on
