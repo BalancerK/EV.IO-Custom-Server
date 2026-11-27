@@ -1739,11 +1739,11 @@ let SHOT_AUTHORITY = S.define({
       + "client's #SHOT# ray is only checked against it. \"client\": the client's ray decides.",
 }, (v) => { SHOT_AUTHORITY = v === "client" ? "client" : "server"; });
 let RAY_CHECK_MAX_DEG = S.define({
-  key: "rayCheckMaxDeg", env: "EVIO_RAY_CHECK_MAX_DEG", type: "number", def: 5, min: 0.05, max: 45, step: 0.05,
+  key: "rayCheckMaxDeg", env: "EVIO_RAY_CHECK_MAX_DEG", type: "number", def: 1, min: 0.05, max: 45, step: 0.05,
   category: "Combat", label: "Client ray check: max angle (deg)",
   desc: "With shotAuthority=server, a client #SHOT# ray further than this from the server's ray is "
-      + "counted as a disagreement. An honest client is within ~0.05 deg normally, but up to ~4 deg "
-      + "while its recoil state is being corrected (a respawn or jump while firing), hence 5.",
+      + "counted as a disagreement. An honest client is within ~0.05 deg normally and 0.35 deg at worst "
+      + "(measured in a jumping fight with deaths, with the respawn fire hold and the extension's 6b8 fix).",
 }, (v) => { RAY_CHECK_MAX_DEG = v; });
 let RAY_CHECK_MAX_ORIGIN = S.define({
   key: "rayCheckMaxOrigin", env: "EVIO_RAY_CHECK_MAX_ORIGIN", type: "number", def: 0.5, min: 0.01, max: 20, step: 0.05,
