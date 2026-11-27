@@ -1702,6 +1702,7 @@ function serverShotSidSuffix(p, frames) {
   const k = _firingFrameIndex(frames, !!p._sendsFirePulse);
   const per = p._simFrameViewTicks;
   const vt = (k >= 0 && Array.isArray(per) && Number.isFinite(per[k])) ? per[k] : p._simViewTick;
+  p._shotTick = Number.isFinite(vt) ? vt : null;
   return Number.isFinite(vt) ? `${pid}:${vt}` : null;
 }
 // The id for pellet `i` of the current shot: the server's when enabled and known, else the client's.
@@ -1721,6 +1722,60 @@ function recordSidCompare(shooter, clientRay) {
   _sidCompare.total++; w.total++;
   if (ok) { _sidCompare.match++; w.match++; }
   else if (_sidCompare.mismatches.length < 20) _sidCompare.mismatches.push(`${clientRay.sid} vs ${shooter._shotSidSuffix}`);
+}
+
+// ── Who decides where a shot goes ───────────────────────────────────────────────────────────
+// "server" (default): a real player's shot is the ray the server builds from their inputs with the
+// client's own formula (see _candidateB): the state before the firing tick, the firing frame's
+// subtickTime and look, and the seeded spread. That is what the official server does — the client
+// sends only inputs. The #SHOT# ray the client still sends is then only CHECKED against it: an
+// honest client agrees to within ~0.05 degrees (measured, 619 shots), so a larger disagreement is
+// counted per player and logged — the signature of a tampered client (silent aim, fake rays).
+// "client": the old behaviour, the client's ray decides (bots always use the server's own aim).
+let SHOT_AUTHORITY = S.define({
+  key: "shotAuthority", env: "EVIO_SHOT_AUTHORITY", type: "enum", choices: ["server", "client"], def: "server",
+  category: "Combat", label: "Shot authority",
+  desc: "\"server\": shots are built by the server from the player's inputs (official model); the "
+      + "client's #SHOT# ray is only checked against it. \"client\": the client's ray decides.",
+}, (v) => { SHOT_AUTHORITY = v === "client" ? "client" : "server"; });
+let RAY_CHECK_MAX_DEG = S.define({
+  key: "rayCheckMaxDeg", env: "EVIO_RAY_CHECK_MAX_DEG", type: "number", def: 5, min: 0.05, max: 45, step: 0.05,
+  category: "Combat", label: "Client ray check: max angle (deg)",
+  desc: "With shotAuthority=server, a client #SHOT# ray further than this from the server's ray is "
+      + "counted as a disagreement. An honest client is within ~0.05 deg normally, but up to ~4 deg "
+      + "while its recoil state is being corrected (a respawn or jump while firing), hence 5.",
+}, (v) => { RAY_CHECK_MAX_DEG = v; });
+let RAY_CHECK_MAX_ORIGIN = S.define({
+  key: "rayCheckMaxOrigin", env: "EVIO_RAY_CHECK_MAX_ORIGIN", type: "number", def: 0.5, min: 0.01, max: 20, step: 0.05,
+  category: "Combat", label: "Client ray check: max origin gap (u)",
+  desc: "Likewise for where the ray starts (an honest client is within ~0.001 u).",
+}, (v) => { RAY_CHECK_MAX_ORIGIN = v; });
+
+// The server's own ray for this shot, or null when it cannot be built (bots, no frames).
+function serverBuiltRay(shooter) {
+  if (SHOT_AUTHORITY !== "server" || !shooter._sendsFirePulse || !shooter._shotPre) return null;
+  return _candidateB(shooter, shooter._shotPre, shooter._shotTick);
+}
+// Score the client's #SHOT# ray against the server's. Only directions of single-ray shots are
+// compared (a shotgun's client ray is one pellet; its origin is still checked).
+function checkClientRay(shooter, clientRay, built, compareDir) {
+  if (!clientRay || !built) return;
+  const st = shooter._rayCheck || (shooter._rayCheck = { checks: 0, disagree: 0, worstDeg: 0, worstOrigin: 0, lastLogMs: 0 });
+  const origin = _dist(built.eye, { x: clientRay.ox, y: clientRay.oy, z: clientRay.oz });
+  const deg = compareDir ? _angleDeg(built.dir, { x: clientRay.dx, y: clientRay.dy, z: clientRay.dz }) : 0;
+  st.checks++;
+  st.worstDeg = Math.max(st.worstDeg, deg);
+  st.worstOrigin = Math.max(st.worstOrigin, origin);
+  if (deg > RAY_CHECK_MAX_DEG || origin > RAY_CHECK_MAX_ORIGIN) {
+    st.disagree++;
+    const now = Date.now();
+    if (now - st.lastLogMs > 1000) {
+      st.lastLogMs = now;
+      console.warn(`[evio-anticheat] ${shooter._ownerSid || "?"} client ray disagrees with the server's: `
+        + `${deg.toFixed(2)} deg, origin ${origin.toFixed(2)} u (weapon ${shooter.equippedWeaponId}; `
+        + `${st.disagree}/${st.checks} shots so far). The server's ray was used.`);
+    }
+  }
 }
 
 const WEAPON_SPREAD_MIN = _weaponDataMap("spreadMin");
@@ -1809,6 +1864,13 @@ function captureShotPre(p, frames) {
     lookX: lookX * LOOK_SCALE, lookY: lookY * LOOK_SCALE,
     spreadState: { tsls: ps.Qezh4wz, tslm: ps.Qezdgca, grounded: !!ps.Q9t2fit, zooming: !!ps.Qgk2mcg },
     clientTick: p._simClientTick, viewTick: p._simViewTick, prevViewTick: p._prevSimViewTick,
+    // Debug only (rayDebug): the tick's frames, every client list through the same cap as any other reader.
+    rawFrames: RAY_DEBUG && Array.isArray(frames) ? JSON.stringify(frames.slice(0, 16).map((f) => {
+      const pk = Array.isArray(f) && Array.isArray(f[1]) ? f[1] : [];
+      const list = (x) => (Array.isArray(x) ? _boundedActions(x) : null);
+      const look = Array.isArray(pk[3]) ? [Number(pk[3][0]) || 0, Number(pk[3][1]) || 0] : null;
+      return [Number(f && f[0]), list(pk[0]), list(pk[1]), list(pk[2]), look];
+    })) : null,
   };
 }
 
@@ -1872,8 +1934,9 @@ function recordShotCompare(shooter, clientRay, candA, candB, hits, pre, sidInfo)
       + `B:${s.hitB} o=${s.oB.toFixed(3)} a=${s.aB.toFixed(3)}° (no-spread ${s.aBns.toFixed(3)}°) `
       + `c=${s.c.toFixed(3)} fitC=${s.fitC == null ? "-" : s.fitC.toFixed(3)} tickRel=${s.tickRel} pid=${s.pidMatch} `
       + `dPitchB=${(s.dPitchB * 180 / Math.PI).toFixed(3)}° dYawB=${(s.dYawB * 180 / Math.PI).toFixed(3)}° pOff=${s.pitchOffset.toFixed(4)} `
-      + `tsls=${s.tsls} lookY=${s.lookY.toFixed(4)} frame=${s.frame}/${s.frames} sidTick=${s.sidTick} ct=${s.ct} vt=${s.vt}`);
+      + `tsls=${s.tsls} lookY=${s.lookY.toFixed(4)} frame=${s.frame}/${s.frames} sidTick=${s.sidTick} ct=${s.ct} vt=${s.vt} g=${pre.spreadState.grounded ? 1 : 0} tslm=${pre.spreadState.tslm} spread=${s.spread.toFixed(4)}`);
   }
+  if (RAY_DEBUG && s.aB > 0.1) console.log(`[evio-shotcmp-frames] ${pre.rawFrames} pre yaw ${pre.yaw.toFixed(5)} pitch ${pre.pitch.toFixed(5)} pOff ${pre.pitchOffset.toFixed(5)} B yaw ${candB.yaw.toFixed(5)} pitch ${candB.pitch.toFixed(5)} | client yaw ${cl.yaw.toFixed(5)} pitch ${cl.pitch.toFixed(5)}`);
   if (_shotCompare.total % 100 === 0) console.log("[evio-shotcmp] " + JSON.stringify(shotCompareSummary()));
 }
 
@@ -4957,7 +5020,9 @@ function dropSiblingPelletRays(shooter, sid) {
 // Resolve the shot's eye + aim direction: prefer the client's exact ray (zero reconstruction
 // divergence), else fall back to the server's reconstruction.
 function shotRay(shooter, clientRay) {
-  if (clientRay) {
+  const built = serverBuiltRay(shooter);
+  if (built) return { eye: built.eye, dir: built.dir, fromClient: false, built };
+  if (clientRay && SHOT_AUTHORITY === "client") {
     const len = Math.hypot(clientRay.dx, clientRay.dy, clientRay.dz) || 1;
     return {
       eye: { x: clientRay.ox, y: clientRay.oy, z: clientRay.oz },
@@ -4965,6 +5030,11 @@ function shotRay(shooter, clientRay) {
       fromClient: true,
     };
   }
+  return legacyShotRay(shooter);
+}
+// The pre-existing server reconstruction (post-tick eye and aim, no spread): bots, and candidate A of
+// the shot comparison.
+function legacyShotRay(shooter) {
   const ps = shooter._ps;
   return { eye: shooterEye(shooter), dir: phys.aimDirection(ps.Qqg4go0, ps.Qcrzrpr), fromClient: false };
 }
@@ -4999,21 +5069,25 @@ function destroyMineInLineOfFire(eye, dir, sessions) {
 function fireHitscan(shooter, sessions, clientRay) {
   const ps = shooter._ps;
   if (!ps || !ps.Qdsukt4 || !bpw.world) return;
-  const { eye, dir } = shotRay(shooter, clientRay);
+  const { eye, dir, built } = shotRay(shooter, clientRay);
+  checkClientRay(shooter, clientRay, built, true);
   // Shot comparison (measurement only, see SHOT_COMPARE): the rays the server would build itself,
-  // tested against the same rewound targets. The shot still uses the client's ray.
+  // tested against the same rewound targets. With shotAuthority=client the shot uses the client's
+  // ray; with server it uses B, and "client" in the stats is then the client's ray, tested alongside.
   const pre = SHOT_COMPARE && clientRay ? shooter._shotPre : null;
   let cmp = null;
   if (pre) {
     const parts = typeof clientRay.sid === "string" ? clientRay.sid.split(":") : [];
     const sidInfo = parts.length >= 3 ? { tick: Number(parts[parts.length - 1]), pid: parts.slice(1, -1).join(":") } : null;
-    cmp = { pre, sidInfo, A: shotRay(shooter, null), B: _candidateB(shooter, pre, sidInfo ? sidInfo.tick : null) };
+    cmp = { pre, sidInfo, A: legacyShotRay(shooter), B: _candidateB(shooter, pre, sidInfo ? sidInfo.tick : null) };
   }
   const hits = {};
   const hit = withLagComp(shooter, sessions, () => {
     const h = phys.hitscanPlayers(bpw.world, eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, ps.Q7q6byi);
     if (cmp) {
-      hits.client = h;
+      hits.client = built
+        ? phys.hitscanPlayers(bpw.world, clientRay.ox, clientRay.oy, clientRay.oz, clientRay.dx, clientRay.dy, clientRay.dz, ps.Q7q6byi)
+        : h;
       hits.A = phys.hitscanPlayers(bpw.world, cmp.A.eye.x, cmp.A.eye.y, cmp.A.eye.z, cmp.A.dir.x, cmp.A.dir.y, cmp.A.dir.z, ps.Q7q6byi);
       hits.B = phys.hitscanPlayers(bpw.world, cmp.B.eye.x, cmp.B.eye.y, cmp.B.eye.z, cmp.B.dir.x, cmp.B.dir.y, cmp.B.dir.z, ps.Q7q6byi);
     }
@@ -5154,14 +5228,17 @@ function shotgunAimFromClientRay(shooter, clientRay, nid, count, zooming) {
 function fireShotgunPellets(shooter, sessions, clientRay) {
   const ps = shooter._ps;
   if (!ps || !ps.Qdsukt4 || !bpw.world) return;
-  const { eye, dir: rayDir } = shotRay(shooter, clientRay);
+  const { eye, dir: rayDir, built } = shotRay(shooter, clientRay);
+  checkClientRay(shooter, clientRay, built, false);
   const nid = shooter.equippedWeaponId;
   const count = weaponPelletCount(nid);
   const zooming = !!ps.Qgk2mcg;
   const bd = WEAPON_DMG[nid];
   // shotRay's direction is the crosshair only when it was reconstructed server-side; a client ray is
   // one PELLET's direction, so recover the real aim from it first (see shotgunAimFromClientRay).
-  const aim = clientRay ? shotgunAimFromClientRay(shooter, clientRay, nid, count, zooming) : _yawPitchOf(rayDir);
+  const aim = built ? { yaw: built.yaw, pitch: built.pitch }
+    : (clientRay && SHOT_AUTHORITY === "client") ? shotgunAimFromClientRay(shooter, clientRay, nid, count, zooming)
+    : _yawPitchOf(rayDir);
   const fwd = _rotateByYawPitch(0, 0, -1, aim.yaw, aim.pitch);
   // Each pellet's hit is keyed by ITS OWN client sid "i:shooter:tick", the id the client gave that
   // bullet. They all used to carry pellet 0's sid, so the hits collided on one playerMap key: one
@@ -5202,7 +5279,8 @@ let MELEE_FORGIVENESS_MARGIN = S.define({
 function fireMelee(shooter, sessions, clientRay) {
   const ps = shooter._ps;
   if (!ps || !ps.Qdsukt4 || !bpw.world) return;
-  const { eye, dir } = shotRay(shooter, clientRay);
+  const { eye, dir, built } = shotRay(shooter, clientRay);
+  checkClientRay(shooter, clientRay, built, true);
   let hit = withLagComp(shooter, sessions, () =>
     phys.meleeHit(bpw.world, eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, ps.Q7q6byi));
   if (!hit && MELEE_FORGIVENESS_MARGIN > 0) {
@@ -5428,8 +5506,15 @@ function preTickFire(p, frames) {
       }
     }
     p._fireAlpha = SUBFRAME_SHOT ? firingAlphaFromFrames(frames) : 1;   // render alpha of the firing sub-frame
-    if (SHOT_COMPARE) captureShotPre(p, frames); else p._shotPre = null;
     p._shotSidSuffix = serverShotSidSuffix(p, frames);
+    // The state the client fired from (see captureShotPre) — needed for every real player's shot
+    // once the server builds the ray itself, not only while measuring.
+    if (SHOT_COMPARE || (SHOT_AUTHORITY === "server" && p._sendsFirePulse)) {
+      captureShotPre(p, frames);
+      // The client rewinds the targets at the same c it fired from: the subtickTime of the frame
+      // carrying the fire pulse, not the first frame holding fire.
+      if (SUBFRAME_SHOT && p._shotPre && p._shotPre.frameIndex >= 0) p._fireAlpha = p._shotPre.c;
+    } else p._shotPre = null;
     // Recoil arm + actionTickCounter reset are NOT done here — they run in the correct client order
     // inside _integrateWithExtractedPhysics (arm uses the PREV tick's atc==0; reset is AFTER l()).
   }
@@ -7446,6 +7531,13 @@ function _integrateWithExtractedPhysics(playerState, serverTick, explicitFrames)
         ps.Qezh4wz = 0;
         armRecoil(ps, playerState.equippedWeaponId);
       }
+      // actionTickCounter (opcode 146) is this tick's value only from here: it was copied at the top
+      // of the tick, BEFORE this block stepped it (or zeroed it for a shot), so the body carried the
+      // previous tick's count. Harmless while the client never took the server's recoil state; once
+      // it corrects pitch to the server (no 6b7/6b8 pitch exemption), a correction hands it the
+      // stale count and its recoil curve runs one step off — measured as "pitchOffset server -0.007,
+      // client 0" on 141 of 149 failed checks in a jumping fight.
+      playerState.actionTickCounter = ps.Qezh4wz;
     }
     // Recoil debug (EVIO_RECOIL_DEBUG=1): log per-tick while holding fire — does the server FIRE and
     // emit a recoil pitchOffset while MOVING? Confirms/denies "no recoil during sprint/slide/fall".
@@ -10852,6 +10944,11 @@ function getStatus() {
       lookApplied: s._lookRecv && s.playerState
         ? +((s.playerState._lookApplied || 0) / s._lookRecv).toFixed(4) : null,
       lookLost: +(s._lookLost || 0).toFixed(3),
+      // shotAuthority=server: how often this player's #SHOT# ray disagreed with the server's.
+      rayCheck: s.playerState && s.playerState._rayCheck ? {
+        checks: s.playerState._rayCheck.checks, disagree: s.playerState._rayCheck.disagree,
+        worstDeg: +s.playerState._rayCheck.worstDeg.toFixed(3), worstOrigin: +s.playerState._rayCheck.worstOrigin.toFixed(3),
+      } : null,
       // Rotation that arrived AFTER its tick was simulated and was carried into the next one. At
       // inputBufferDepth 0 this is the cost of dropping the buffer: the input is not lost, but it
       // lands a tick late, so with reconciliation ON each carried frame can produce a correction.
