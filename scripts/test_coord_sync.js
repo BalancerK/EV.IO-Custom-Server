@@ -82,6 +82,7 @@ function buildSprintInput(prevTick, serverTick, clientTick) {
  * Body layout (from appendPlayerTickBody):
  *   ..., 244, playerId, 90, playerId, 91, 1, 136, 0, x, y, z, ...
  */
+const _lastPos = new Map();
 function extractPlayerPosition(body, playerId) {
   for (let i = 0; i < body.length - 1; i++) {
     if (body[i] === 244 && body[i + 1] === playerId) {
@@ -90,8 +91,18 @@ function extractPlayerPosition(body, playerId) {
         // Stop when we hit the next entity block or end marker
         if (body[j] === 244 || body[j] === 280) break;
         if (body[j] === 136) {
-          // body[j+1] = 0 (subOpcode), body[j+2]=x, body[j+3]=y, body[j+4]=z
-          return { x: body[j + 2], y: body[j + 3], z: body[j + 4] };
+          // body[j+1] = mode: bits 1/2/4 say x/y/z are left out (unchanged — the client keeps the
+          // last value, bundle :65845); the present components follow in x, y, z order.
+          const mode = body[j + 1];
+          const last = _lastPos.get(playerId) || { x: 0, y: 0, z: 0 };
+          let k = j + 2;
+          const p = {
+            x: mode & 1 ? last.x : body[k++],
+            y: mode & 2 ? last.y : body[k++],
+            z: mode & 4 ? last.z : body[k++],
+          };
+          _lastPos.set(playerId, p);
+          return p;
         }
       }
     }

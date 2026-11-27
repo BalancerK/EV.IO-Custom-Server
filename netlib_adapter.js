@@ -36,6 +36,20 @@ const WS_CLOSED = 3;
 // in this version of the library despite being documented in its README.
 const LOBBY_APP_MARKER = 'evio-custom-server';
 
+// The data channels, by label in this order (netlib numbers them 0, 1, 2 and both ends must agree on
+// the labels, so none may be added, removed or reordered). netlib's own "unreliable" is ORDERED with
+// no retransmits: when one packet is lost, every later one waits in the receiver's SCTP stack until
+// the sender gives the lost one up (a fast-retransmit round, ~1 RTT plus a few packets), then they all
+// arrive at once — a hitch, then a burst of 3-4 states the client throws away to catch up. Unordered
+// delivers each packet the moment it lands. Ordering is a sending-side choice per message, so a peer
+// still on the old setting talks to this one without trouble.
+// EVIO_RTC_ORDERED=1 restores netlib's ordered channel.
+const RTC_DATA_CHANNELS = {
+  reliable: { ordered: true },
+  unreliable: process.env.EVIO_RTC_ORDERED === '1' ? { ordered: true, maxRetransmits: 0 } : { ordered: false, maxRetransmits: 0 },
+  control: { ordered: false },
+};
+
 // ── The ws-compatible peer wrapper ──────────────────────────────────────────────────────
 class NetlibPeerSocket extends EventEmitter {
   constructor(network, peer, remoteLabel) {
@@ -218,6 +232,7 @@ async function startNetlibListener(opts) {
   // rest of this codebase's `_maybeStart*` pattern for optional subsystems.
   const { Network, DefaultRTCConfiguration } = require('./vendor/netlib.js');
   const network = new Network(gameId, DefaultRTCConfiguration, signalingUrl);
+  network.dataChannels = RTC_DATA_CHANNELS;   // before any peer exists: channels are made per peer
 
   const sockets = new Map(); // peer.id -> NetlibPeerSocket
 
@@ -336,6 +351,7 @@ module.exports = {
   startNetlibListener,
   NetlibPeerSocket,
   LOBBY_APP_MARKER,
+  RTC_DATA_CHANNELS,
   PING_CONTROL_MESSAGE,
   PONG_CONTROL_MESSAGE,
   answerTestMapRequest,

@@ -21,6 +21,17 @@ process.env.EVIO_ADMIN = '0';
 process.env.EVIO_CLICK_TO_PLAY = '0';
 const srv = require('../local_ws_server');
 const { encode } = require('@msgpack/msgpack');
+const S = require('../settings');
+// The client's vec3 decode (bundle :65845): mode bits 1/2/4 = x/y/z missing (kept).
+const VEC_OPS = new Set(['136', '137', '176', '178', '179', '180', '211']);
+function setField(m, f) {
+  if (VEC_OPS.has(f.key) && Array.isArray(f.tokens) && typeof f.tokens[1] === 'number' && f.tokens[1] <= 7) {
+    const mode = f.tokens[1]; let k = 2;
+    for (const [bit, ax] of [[1, 'x'], [2, 'y'], [4, 'z']]) if (!(mode & bit)) m.set(f.key + ax, JSON.stringify(f.tokens[k++]));
+    return;
+  }
+  m.set(f.key, JSON.stringify(f.tokens));
+}
 
 let pass = 0, fail = 0;
 function ok(desc, cond, detail = '') {
@@ -41,7 +52,7 @@ function parse(body) {
     let blk = body.slice(i, j), split = srv._splitPlayerBlock(blk);
     while (!split && j < body.length) { j++; while (j < body.length && body[j] !== 244 && body[j] !== 280) j++; blk = body.slice(i, j); split = srv._splitPlayerBlock(blk); }
     const m = out.P.get(String(blk[1])) || new Map();
-    for (const f of split || []) m.set(f.key, JSON.stringify(f.tokens));
+    for (const f of split || []) setField(m, f);
     out.P.set(String(blk[1]), m);
     i = j;
   }
@@ -61,12 +72,20 @@ function apply(model, pkt) {
     for (const [k, v] of m) mm.set(k, v);
   }
 }
+// A "ticks since" counter that both sides hold at a never-happened value (>= 1000: 9999 vs the
+// client's 10003) means the same thing; the server deliberately lets another player's drift there.
+function sameField(k, a, b) {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || !(srv.DELTA_COUNTER_DIR[k] > 0)) return false;
+  const va = JSON.parse(a)[1], vb = JSON.parse(b)[1];
+  return va >= 1000 && vb >= 1000;
+}
 function diff(model, full) {
   const bad = [];
   for (const s of ['H', 'T']) for (const [k, v] of full[s]) if (model[s].get(k) !== v) bad.push(`${s}${k}`);
   for (const [eid, m] of full.P) {
     const mm = model.P.get(eid);
-    for (const [k, v] of m) if (!mm || mm.get(k) !== v) bad.push(`${eid}:${k}`);
+    for (const [k, v] of m) if (!mm || !sameField(k, mm.get(k), v)) bad.push(`${eid}:${k}`);
   }
   return bad;
 }
@@ -102,7 +121,7 @@ function run(lossRate, skipRate, seed, reliable = false) {
       const filt = srv.buildTickBody(s.playerId, tick, s.playerState, sessions, ctx);
       stats.fullBytes += encode(full).length;
       if (rand() < skipRate) continue;                    // rate gate: not sent, not committed
-      stats.filtBytes += encode(filt).length;
+      { const b = encode(filt).length; stats.filtBytes += b; if (tick >= 1040) stats.maxBytes = Math.max(stats.maxBytes || 0, b); }
       srv.commitDeltaContext(ctx);                        // sent
       const model = models.get(s.playerId);
       const delivered = rand() >= lossRate;
@@ -121,6 +140,7 @@ function run(lossRate, skipRate, seed, reliable = false) {
   return stats;
 }
 
+S.set('deltaSpreadRefresh', false, 'test');   // strict "one tick refreshes everything" checks first
 console.log('\n── no loss: the client ends up exactly where the full stream would put it ──');
 {
   const st = run(0, 0, 7);
@@ -141,6 +161,19 @@ console.log('\n── 10% lost + 10% skipped by the rate gate ──');
     `${st.mismatchTicks} of ${st.ticks}`);
 }
 
+console.log('\n── refresh spread over players (default): same guarantees, no giant packets ──');
+{
+  S.set('deltaSpreadRefresh', true, 'test');
+  const st = run(0, 0, 7);
+  ok(`no loss: identical on all ${st.ticks} recipient-ticks`, st.mismatchTicks === 0, st.firstBad);
+  const lossy = run(0.10, 0.10, 11);
+  ok(`10% lost: no value stays wrong for more than two refresh periods (worst ${lossy.worstStreak} ticks)`, lossy.worstStreak <= 2 * 20 + 4);
+  S.set('deltaSpreadRefresh', false, 'test');
+  const lumpy = run(0, 0, 7);
+  S.set('deltaSpreadRefresh', true, 'test');
+  ok(`after the first second, the biggest packet is smaller (${st.maxBytes} vs ${lumpy.maxBytes} bytes)`, st.maxBytes < lumpy.maxBytes);
+}
+
 console.log('\n── a reliable WebSocket recipient: counters left out too ──');
 {
   const st = run(0, 0.10, 13, true);
@@ -152,12 +185,13 @@ console.log('\n── a reliable WebSocket recipient: counters left out too ─�
 
 console.log('\n── a counter that counts up by one per packet ──');
 {
-  const count = (reliable) => {
+  const count = (reliable, self = false) => {
     const rec = { playerId: 'r', ws: reliable ? { reliableOrdered: true } : undefined, _deltaPhase: 1 };
     let sent = 0;
     for (let tick = 100; tick < 140; tick++) {
       const block = [244, 'x', 146, tick - 50];          // ticksSinceLastShot, +1 every tick
       const ctx = srv.makeDeltaContext(rec, tick);
+      ctx.selfEid = self ? 'x' : 'r';
       const out = [];
       srv._deltaAppendPlayerBlock(out, block, srv._splitPlayerBlock(block), ctx);
       srv.commitDeltaContext(ctx);
@@ -165,9 +199,23 @@ console.log('\n── a counter that counts up by one per packet ──');
     }
     return sent;
   };
-  const r = count(true), u = count(false);
+  const r = count(true), u = count(false), own = count(false, true);
   ok(`reliable recipient: sent only on the first tick and full refreshes (${r} of 40)`, r <= 3, String(r));
-  ok(`unreliable recipient: sent every tick (${u} of 40)`, u === 40, String(u));
+  ok(`unreliable recipient, another player's counter: first tick + re-sends + refreshes only (${u} of 40)`, u <= 3 + 4, String(u));
+  ok(`unreliable recipient, its OWN counter: sent every tick (${own} of 40)`, own === 40, String(own));
+  // a jump in value (a reset to 0) is re-sent for the re-send window over a lossy link
+  {
+    const rec = { playerId: 'r', _deltaPhase: 3 };
+    const sentAt = [];
+    for (let tick = 200; tick < 230; tick++) {
+      const v = tick < 210 ? tick - 100 : tick - 210;     // resets to 0 at 210
+      const block = [244, 'x', 146, v];
+      const ctx = srv.makeDeltaContext(rec, tick); ctx.selfEid = 'r';
+      const out = []; srv._deltaAppendPlayerBlock(out, block, srv._splitPlayerBlock(block), ctx); srv.commitDeltaContext(ctx);
+      if (out.includes(146)) sentAt.push(tick);
+    }
+    ok(`a reset is sent and re-sent (${sentAt.filter((t) => t >= 210).join(',')})`, [210, 211, 212, 213, 214].every((t) => sentAt.includes(t)));
+  }
 }
 
 console.log('\n── off switch ──');

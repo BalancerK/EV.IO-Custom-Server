@@ -62,7 +62,7 @@ for (let tick = 2000; tick < 2045; tick++) {
   if (tick < 2008) continue;   // sent, but lost on the way: the introduction and the first changes
   for (let k = 1; k < blk.ops.length; k++) if (blk.ops[k] < blk.ops[k - 1]) { orderOk = false; orderBad = `${blk.ops[k - 1]} before ${blk.ops[k]} @${tick}`; }
   for (const [k, v] of blk.fields) client.set(k, v);
-  if (!ctx.full && blk.fields.has('210')) steadyIdentityTicks++;
+  if (blk.fields.has('210')) steadyIdentityTicks++;   // each player refreshes on its own tick (deltaSpreadRefresh)
   if (firstHaveAll === null && want.every((op) => client.has(String(op)))) firstHaveAll = tick - 2008;
 }
 ok(`name, uid, bot flag, weapon and attributes arrive without the introduction (tick +${firstHaveAll})`,
@@ -70,7 +70,7 @@ ok(`name, uid, bot flag, weapon and attributes arrive without the introduction (
 ok('they match what the introduction says', [210, 212, 231, 237, 110, 121].every((op) => client.get(String(op)) === introOf(op)),
   [210, 212, 231, 237].map((op) => `${op}: ${client.get(String(op))} vs ${introOf(op)}`).join(', '));
 ok('the weapon is the one actually equipped', client.get('127') === JSON.stringify([127, 262]), client.get('127'));
-ok('identity is not resent between refreshes while unchanged', steadyIdentityTicks === 0, `${steadyIdentityTicks} ticks`);
+ok(`identity goes out only on pb's refreshes while unchanged (${steadyIdentityTicks} of 37 ticks)`, steadyIdentityTicks <= 2, `${steadyIdentityTicks} ticks`);
 ok('every peer block stays in ascending opcode order', orderOk, orderBad);
 
 console.log('\n── pb switches weapon with no switch send window ──');
