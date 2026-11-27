@@ -176,6 +176,23 @@ function clientTick(s, firing) {
     ok('and releasing zoom afterwards does not change it', Math.abs(p._ps.Qq1azd5 - want) < 1e-9, String(p._ps.Qq1azd5));
   }
 
+  console.log('\n── the server builds the shot id "pellet:playerId:tick" itself ──');
+  {
+    // tick = the currentServerTick of the input packet holding the frame that fired (the client
+    // passes its server view's tick). A tick's frames can come in two packets: the fire pulse is in
+    // the second one here, which was built when the client already had server tick 101.
+    const p = mk();
+    drive(p, [f([])], 1);                                  // creates the physics state (player id)
+    p._sendsFirePulse = true;
+    p._simFrameViewTicks = [100, 101];
+    srv.preTickFire(p, [f([5]), f([5, 18])]);
+    const pid = p._ps.Q7q6byi;
+    ok('the shot fires', p._firingThisTick === true);
+    ok(`its id suffix is playerId:tick of the firing frame's packet (${p._shotSidSuffix})`, p._shotSidSuffix === `${pid}:101`);
+    ok('pellet i gets its own index', srv.shotSid(p, null, 3) === `3:${pid}:101`);
+    ok('the client\'s id is not needed', srv.shotSid(p, { sid: '0:someone-else:5' }, 0) === `0:${pid}:101`);
+  }
+
   console.log('\n── releasing fire stops it on the same tick ──');
   {
     const p = mk();

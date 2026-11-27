@@ -1679,6 +1679,50 @@ let SHOT_COMPARE = S.define({
       + "/api/status shotCompare and a console summary every 100 shots.",
 }, (v) => { SHOT_COMPARE = v; });
 
+// ── Server-built shot ids ───────────────────────────────────────────────────────────────────
+// A hit event is keyed by the client's own id for the bullet, "pellet:playerId:tick", so the client's
+// hit prediction is pruned in the same packet that carries the real damage (no double-counted enemy
+// bar). The id used to come from the client's #SHOT# message. Every part of it is known here: pellet
+// is the pellet's index, playerId is the shooter's id, and tick is the newest SERVER tick the client
+// had when it fired (the client passes its server view's tick, onFrame(..., o.fullGameState.tick)),
+// which is exactly the currentServerTick in the input packet holding the frame that fired — measured
+// equal on 600 of 600 shots. So the server builds it, and stops trusting one more client value.
+let SERVER_SHOT_ID = S.define({
+  key: "serverShotId", env: "EVIO_SERVER_SHOT_ID", type: "bool", def: true,
+  category: "Combat", label: "Build shot ids on the server",
+  desc: "Key hit events by the id the server derives (pellet:player:tick from the input packet) "
+      + "instead of the one in the client's #SHOT# message. Off = use the client's id.",
+}, (v) => { SERVER_SHOT_ID = v; });
+
+// Called when preTickFire decides a shot: "playerId:tick" for this shot, or null (bots, or no tick).
+function serverShotSidSuffix(p, frames) {
+  const ps = p._ps;
+  const pid = ps && ps.Q7q6byi;
+  if (pid == null) return null;
+  const k = _firingFrameIndex(frames, !!p._sendsFirePulse);
+  const per = p._simFrameViewTicks;
+  const vt = (k >= 0 && Array.isArray(per) && Number.isFinite(per[k])) ? per[k] : p._simViewTick;
+  return Number.isFinite(vt) ? `${pid}:${vt}` : null;
+}
+// The id for pellet `i` of the current shot: the server's when enabled and known, else the client's.
+function shotSid(shooter, clientRay, i = 0) {
+  if (SERVER_SHOT_ID && shooter._shotSidSuffix) return `${i}:${shooter._shotSidSuffix}`;
+  if (!clientRay || !clientRay.sid) return null;
+  if (i === 0) return clientRay.sid;
+  const parsed = _parsePelletSid(clientRay.sid);
+  return parsed ? `${i}:${parsed.suffix}` : clientRay.sid;
+}
+const _sidCompare = { total: 0, match: 0, byWeapon: {}, mismatches: [] };
+function recordSidCompare(shooter, clientRay) {
+  if (!clientRay || !clientRay.sid || !shooter._shotSidSuffix) return;
+  const parsed = _parsePelletSid(clientRay.sid);
+  const ok = !!parsed && parsed.suffix === shooter._shotSidSuffix;
+  const w = _sidCompare.byWeapon[shooter.equippedWeaponId] || (_sidCompare.byWeapon[shooter.equippedWeaponId] = { total: 0, match: 0 });
+  _sidCompare.total++; w.total++;
+  if (ok) { _sidCompare.match++; w.match++; }
+  else if (_sidCompare.mismatches.length < 20) _sidCompare.mismatches.push(`${clientRay.sid} vs ${shooter._shotSidSuffix}`);
+}
+
 const WEAPON_SPREAD_MIN = _weaponDataMap("spreadMin");
 const WEAPON_SPREAD_MAX = _weaponDataMap("spreadMax");
 const WEAPON_ZOOM_SPREAD_MOD = _weaponDataMap("zoomSpreadMod");
@@ -1764,7 +1808,7 @@ function captureShotPre(p, frames) {
     crouching: !!ps.Q2r3ysn, scale: (typeof ps.scale === "number" && ps.scale > 0) ? ps.scale : 1,
     lookX: lookX * LOOK_SCALE, lookY: lookY * LOOK_SCALE,
     spreadState: { tsls: ps.Qezh4wz, tslm: ps.Qezdgca, grounded: !!ps.Q9t2fit, zooming: !!ps.Qgk2mcg },
-    clientTick: p._simClientTick,
+    clientTick: p._simClientTick, viewTick: p._simViewTick, prevViewTick: p._prevSimViewTick,
   };
 }
 
@@ -1814,6 +1858,9 @@ function recordShotCompare(shooter, clientRay, candA, candB, hits, pre, sidInfo)
     spread: candB.spread,
     c: pre.c, cum: pre.cum, fitC: _fitAlpha(pre, cEye), frame: pre.frameIndex, frames: pre.frameCount,
     tickRel: sidInfo && Number.isFinite(sidInfo.tick) && Number.isFinite(pre.clientTick) ? sidInfo.tick - pre.clientTick : null,
+    viewRel: sidInfo && Number.isFinite(sidInfo.tick) && Number.isFinite(pre.viewTick) ? sidInfo.tick - pre.viewTick : null,
+    prevViewRel: sidInfo && Number.isFinite(sidInfo.tick) && Number.isFinite(pre.prevViewTick) ? sidInfo.tick - pre.prevViewTick : null,
+    sidTick: sidInfo ? sidInfo.tick : null, ct: pre.clientTick, vt: pre.viewTick,
     pidMatch: sidInfo ? String(sidInfo.pid) === String(shooter._ps && shooter._ps.Q7q6byi) : null,
     hit: victim(hits.client), hitA: victim(hits.A), hitB: victim(hits.B),
   };
@@ -1825,7 +1872,7 @@ function recordShotCompare(shooter, clientRay, candA, candB, hits, pre, sidInfo)
       + `B:${s.hitB} o=${s.oB.toFixed(3)} a=${s.aB.toFixed(3)}° (no-spread ${s.aBns.toFixed(3)}°) `
       + `c=${s.c.toFixed(3)} fitC=${s.fitC == null ? "-" : s.fitC.toFixed(3)} tickRel=${s.tickRel} pid=${s.pidMatch} `
       + `dPitchB=${(s.dPitchB * 180 / Math.PI).toFixed(3)}° dYawB=${(s.dYawB * 180 / Math.PI).toFixed(3)}° pOff=${s.pitchOffset.toFixed(4)} `
-      + `tsls=${s.tsls} lookY=${s.lookY.toFixed(4)} frame=${s.frame}/${s.frames}`);
+      + `tsls=${s.tsls} lookY=${s.lookY.toFixed(4)} frame=${s.frame}/${s.frames} sidTick=${s.sidTick} ct=${s.ct} vt=${s.vt}`);
   }
   if (_shotCompare.total % 100 === 0) console.log("[evio-shotcmp] " + JSON.stringify(shotCompareSummary()));
 }
@@ -1840,7 +1887,8 @@ function shotCompareSummary() {
   const count = (rows, f) => rows.filter(f).length;
   const byWeapon = {};
   for (const r of all) (byWeapon[r.wpn] = byWeapon[r.wpn] || []).push(r);
-  const out = { shots: _shotCompare.total, kept: all.length, weapons: {} };
+  const out = { shots: _shotCompare.total, kept: all.length, weapons: {},
+    shotIds: { matched: `${_sidCompare.match}/${_sidCompare.total}`, byWeapon: _sidCompare.byWeapon, mismatches: _sidCompare.mismatches } };
   for (const [w, rows] of Object.entries(byWeapon)) {
     const hitRows = rows.filter((r) => r.hit !== "-" || r.hitA !== "-" || r.hitB !== "-");
     out.weapons[w] = {
@@ -1853,6 +1901,8 @@ function shotCompareSummary() {
       sameVictimA: hitRows.length ? `${count(hitRows, (r) => r.hitA === r.hit)}/${hitRows.length}` : "0/0",
       sameVictimB: hitRows.length ? `${count(hitRows, (r) => r.hitB === r.hit)}/${hitRows.length}` : "0/0",
       tickRel: Object.fromEntries([...new Set(rows.map((r) => r.tickRel))].map((t) => [t, count(rows, (r) => r.tickRel === t)])),
+      viewRel: Object.fromEntries([...new Set(rows.map((r) => r.viewRel))].map((t) => [t, count(rows, (r) => r.viewRel === t)])),
+      prevViewRel: Object.fromEntries([...new Set(rows.map((r) => r.prevViewRel))].map((t) => [t, count(rows, (r) => r.prevViewRel === t)])),
       playerIdMatches: `${count(rows, (r) => r.pidMatch === true)}/${rows.length}`,
       cFitErr: stat(rows.filter((r) => r.fitC != null).map((r) => ({ v: Math.abs(r.fitC - r.c) })), "v"),
       cumFitErr: stat(rows.filter((r) => r.fitC != null).map((r) => ({ v: Math.abs(r.fitC - r.cum) })), "v"),
@@ -4975,7 +5025,7 @@ function fireHitscan(shooter, sessions, clientRay) {
   }
   const bd = WEAPON_DMG[shooter.equippedWeaponId];
   spawnBullet(shooter._ownerSid, eye, dir, (bd > 0 ? bd * DMG_GLOBAL_MULT * LOBBY_DAMAGE_MULT : 0), shooter.equippedWeaponId);
-  applyHit(shooter, sessions, hit, eye, clientRay && clientRay.sid);
+  applyHit(shooter, sessions, hit, eye, shotSid(shooter, clientRay, 0));
   destroyMineInLineOfFire(eye, dir, sessions);   // a shot through a planted mine / trip mine sets it off
 }
 
@@ -5117,14 +5167,13 @@ function fireShotgunPellets(shooter, sessions, clientRay) {
   // bullet. They all used to carry pellet 0's sid, so the hits collided on one playerMap key: one
   // damage number for the whole blast, and the other pellets' predicted damage was never pruned and
   // sat on the enemy's bar for ~3 ticks (the double-damage flicker).
-  const parsed = clientRay ? _parsePelletSid(clientRay.sid) : null;
   const offs = _pelletOffsets(nid, count, zooming);
   for (let i = 0; i < offs.length; i++) {
     const dir = _pelletDir(offs[i], aim.yaw, aim.pitch);
     const hit = withLagComp(shooter, sessions, () =>
       phys.hitscanPlayers(bpw.world, eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, ps.Q7q6byi));
     spawnBullet(shooter._ownerSid, eye, dir, (bd > 0 ? bd * DMG_GLOBAL_MULT * LOBBY_DAMAGE_MULT : 0), nid, i);
-    applyHit(shooter, sessions, hit, eye, parsed ? `${i}:${parsed.suffix}` : (clientRay && clientRay.sid));
+    applyHit(shooter, sessions, hit, eye, shotSid(shooter, clientRay, i));
   }
   destroyMineInLineOfFire(eye, fwd, sessions);
 }
@@ -5163,7 +5212,7 @@ function fireMelee(shooter, sessions, clientRay) {
     hit = withLagComp(shooter, sessions, () =>
       phys.meleeHit(bpw.world, fx, fy, fz, dir.x, dir.y, dir.z, ps.Q7q6byi));
   }
-  applyHit(shooter, sessions, hit, eye, clientRay && clientRay.sid);
+  applyHit(shooter, sessions, hit, eye, shotSid(shooter, clientRay, 0));
 }
 
 // Dispatch a shot to the melee or ranged path based on the equipped weapon, using the client's exact
@@ -5184,6 +5233,7 @@ function fireWeapon(shooter, sessions) {
       + ` ray=${ray ? 'YES' : 'no'} sid=${ray && ray.sid ? ray.sid : '-'}`
       + ` queued=${Array.isArray(q) ? q.length : 0}`);
   }
+  if (SHOT_COMPARE) recordSidCompare(shooter, ray);
   const nid = shooter.equippedWeaponId;
   if (WEAPON_MELEE[nid]) fireMelee(shooter, sessions, ray);
   else if (isProjectileWeapon(nid)) fireProjectileShot(shooter, sessions, ray);
@@ -5379,6 +5429,7 @@ function preTickFire(p, frames) {
     }
     p._fireAlpha = SUBFRAME_SHOT ? firingAlphaFromFrames(frames) : 1;   // render alpha of the firing sub-frame
     if (SHOT_COMPARE) captureShotPre(p, frames); else p._shotPre = null;
+    p._shotSidSuffix = serverShotSidSuffix(p, frames);
     // Recoil arm + actionTickCounter reset are NOT done here — they run in the correct client order
     // inside _integrateWithExtractedPhysics (arm uses the PREV tick's atc==0; reset is AFTER l()).
   }
@@ -6893,13 +6944,20 @@ function enqueueClientInput(session, decoded) {
       // felt fine — all the deltas are zero, nothing diverges — while turning diverged the yaw
       // every single tick and the reconciler corrected it every single tick.
       const merged = q[q.length - 1].frames.concat(frames);
+      const vstNow = Number(decoded && decoded[2]);
+      const fvstMerged = (q[q.length - 1].fvst || q[q.length - 1].frames.map(() => q[q.length - 1].vst))
+        .concat(frames.map(() => vstNow));
       // Bounded so a client that floods one tick index cannot grow this without limit; far above
       // any real frame rate (240fps is ~12 sub-frames per 50ms tick).
       q[q.length - 1] = {
         clientTick,
+        vst: q[q.length - 1].vst,
         frames: merged.length > MAX_SUBFRAMES_PER_TICK
           ? merged.slice(merged.length - MAX_SUBFRAMES_PER_TICK)
           : merged,
+        fvst: fvstMerged.length > MAX_SUBFRAMES_PER_TICK
+          ? fvstMerged.slice(fvstMerged.length - MAX_SUBFRAMES_PER_TICK)
+          : fvstMerged,
       };
     }
     return;                                                    // stale / out of order
@@ -6910,9 +6968,17 @@ function enqueueClientInput(session, decoded) {
   // newest are kept because they are the freshest input; the client legitimately sends about three.
   q.push({
     clientTick,
+    // The newest server tick the client had when it built this tick's input (currentServerTick). The
+    // client numbers its predicted states from it (serverView1.tick + ticksAhead + 1), and its shot
+    // ids carry that number — see the shot comparison.
+    vst: Number(decoded && decoded[2]),
     frames: frames.length > MAX_SUBFRAMES_PER_TICK
       ? frames.slice(frames.length - MAX_SUBFRAMES_PER_TICK)
       : frames,
+    // The same, per sub-frame: a tick's input can arrive in several packets, and a shot's id carries
+    // the server tick of the packet holding the frame that fired.
+    fvst: (frames.length > MAX_SUBFRAMES_PER_TICK ? frames.slice(frames.length - MAX_SUBFRAMES_PER_TICK) : frames)
+      .map(() => Number(decoded && decoded[2])),
   });
   session._enqCount = (session._enqCount || 0) + 1;
   // See INPUT_QUEUE_MAX_TICKS: this bound is not just a memory guard, it is what keeps a stale
@@ -7142,7 +7208,10 @@ function processBufferedTick(session, globalTick, sessions) {
       // sub-frames carry the render alpha (frameDeltaTime) the client fired from.
       {
         const _t0 = Date.now();
+        playerState._prevSimViewTick = playerState._simViewTick;
         playerState._simClientTick = batch.clientTick;
+        playerState._simViewTick = batch.vst;
+        playerState._simFrameViewTicks = batch.fvst || null;
         preTickFire(playerState, batch.frames);
         _addSimSubTiming("preTickFire", Date.now() - _t0);
       }
@@ -13413,6 +13482,8 @@ module.exports = {
   clientRandOnDisc,
   clientGetSpread,
   clientShotDir,
+  shotSid,
+  serverShotSidSuffix,
   shotCompareSummary,
   buildActiveEntityBlock,
   activeEntities,
