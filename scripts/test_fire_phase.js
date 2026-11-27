@@ -118,6 +118,25 @@ function clientTick(s, firing) {
     ok('fire held in sub-frame 1 but not the last one still shoots', p._firingThisTick === true);
   }
 
+  console.log('\n── a real client fires only on its fire pulse (18), not on every ready tick ──');
+  {
+    // The client's input reader adds 18 on a FRAME-time timer, so a held Auto Rifle (cooldown 2)
+    // pulses every 2 ticks with an occasional 3. 5 is held throughout. Official fires on exactly the
+    // ticks carrying 18; firing on 5 + cooldown took the extra shot on tick 5 here.
+    const p = mk();
+    const pulseTicks = [1, 3, 6, 8, 10, 13, 15];
+    const fired = [];
+    for (let t = 1; t <= 16; t++) {
+      drive(p, [f(pulseTicks.includes(t) ? [5, 18] : [5])], t);
+      if (p._firingThisTick) fired.push(t);
+    }
+    ok(`fires on exactly the pulse ticks (${fired.join(',')})`, fired.join(',') === pulseTicks.join(','),
+      `expected ${pulseTicks.join(',')}`);
+    const bot = mk(), botFired = [];
+    for (let t = 1; t <= 6; t++) { drive(bot, [f([5])], t); if (bot._firingThisTick) botFired.push(t); }
+    ok(`a bot (5 only, never 18) still fires on the cooldown (${botFired.join(',')})`, botFired.join(',') === '1,3,5');
+  }
+
   console.log('\n── releasing fire stops it on the same tick ──');
   {
     const p = mk();
